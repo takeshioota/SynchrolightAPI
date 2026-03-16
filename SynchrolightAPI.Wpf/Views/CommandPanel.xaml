@@ -1,0 +1,123 @@
+<UserControl x:Class="SynchrolightAPI.Wpf.Views.CommandPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="clr-namespace:SynchrolightAPI.Wpf.Converters">
+    <UserControl.Resources>
+        <conv:ByteToHexConverter x:Key="ByteToHex"/>
+        <conv:RgbToBrushConverter x:Key="RgbToBrush"/>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    </UserControl.Resources>
+
+    <GroupBox Header="コマンド">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="4">
+                <!-- コマンド選択 -->
+                <TextBlock Text="コマンド:" Margin="0,0,0,2"/>
+                <ComboBox ItemsSource="{Binding CommandTypes}" SelectedItem="{Binding SelectedCommand}"
+                          Margin="0,0,0,8"/>
+
+                <Separator Margin="0,0,0,8"/>
+
+                <!-- Field -->
+                <StackPanel Visibility="{Binding ShowField, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                    <TextBlock Text="Field:"/>
+                    <TextBox Text="{Binding Field, Converter={StaticResource ByteToHex}, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- StartRow -->
+                <StackPanel Visibility="{Binding ShowStartRow, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                    <TextBlock Text="開始行:"/>
+                    <TextBox Text="{Binding StartRow, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- StartCol -->
+                <StackPanel Visibility="{Binding ShowStartCol, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                    <TextBlock Text="開始列:"/>
+                    <TextBox Text="{Binding StartCol, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- Len -->
+                <StackPanel Visibility="{Binding ShowLen, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                    <TextBlock Text="長さ:"/>
+                    <TextBox Text="{Binding Len, Converter={StaticResource ByteToHex}, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- RowLen -->
+                <StackPanel Visibility="{Binding ShowRowLen, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                    <TextBlock Text="行数:"/>
+                    <TextBox Text="{Binding RowLen, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- ColLen -->
+                <StackPanel Visibility="{Binding ShowColLen, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                    <TextBlock Text="列数:"/>
+                    <TextBox Text="{Binding ColLen, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- FrameNo (A1) -->
+                <StackPanel Visibility="{Binding ShowFrameNo, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                    <TextBlock Text="フレーム番号:"/>
+                    <TextBox Text="{Binding FrameNo, UpdateSourceTrigger=PropertyChanged}" Width="100" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- RxChannel (A6) -->
+                <StackPanel Visibility="{Binding ShowRxChannel, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                    <TextBlock Text="受信チャネル:"/>
+                    <TextBox Text="{Binding RxChannel, Converter={StaticResource ByteToHex}, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- ProgNo / BlockNo (AC) -->
+                <StackPanel Visibility="{Binding ShowProgBlock, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
+                    <TextBlock Text="プログラム番号:"/>
+                    <TextBox Text="{Binding ProgNo, Converter={StaticResource ByteToHex}, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left" Margin="0,0,0,4"/>
+                    <TextBlock Text="ブロック番号:"/>
+                    <TextBox Text="{Binding BlockNo, Converter={StaticResource ByteToHex}, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- RGB -->
+                <StackPanel Visibility="{Binding ShowRgb, Converter={StaticResource BoolToVis}}" Margin="0,4,0,4">
+                    <TextBlock Text="色:" Margin="0,0,0,2"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="R" VerticalAlignment="Center" Width="14"/>
+                        <TextBox Text="{Binding ColorR, Converter={StaticResource ByteToHex}, UpdateSourceTrigger=PropertyChanged}" Width="40" Margin="0,0,8,0"/>
+                        <TextBlock Text="G" VerticalAlignment="Center" Width="14"/>
+                        <TextBox Text="{Binding ColorG, Converter={StaticResource ByteToHex}, UpdateSourceTrigger=PropertyChanged}" Width="40" Margin="0,0,8,0"/>
+                        <TextBlock Text="B" VerticalAlignment="Center" Width="14"/>
+                        <TextBox Text="{Binding ColorB, Converter={StaticResource ByteToHex}, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
+                    </StackPanel>
+
+                    <!-- プレビュー -->
+                    <Border Height="24" Margin="0,0,0,4" BorderBrush="Gray" BorderThickness="1" CornerRadius="2">
+                        <Border.Background>
+                            <MultiBinding Converter="{StaticResource RgbToBrush}">
+                                <Binding Path="ColorR"/>
+                                <Binding Path="ColorG"/>
+                                <Binding Path="ColorB"/>
+                            </MultiBinding>
+                        </Border.Background>
+                    </Border>
+
+                    <!-- プリセット -->
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="赤" Command="{Binding SetPresetColorCommand}" CommandParameter="Red"
+                                Width="36" Margin="0,0,2,0" Background="#FFCCCC"/>
+                        <Button Content="緑" Command="{Binding SetPresetColorCommand}" CommandParameter="Green"
+                                Width="36" Margin="0,0,2,0" Background="#CCFFCC"/>
+                        <Button Content="青" Command="{Binding SetPresetColorCommand}" CommandParameter="Blue"
+                                Width="36" Margin="0,0,2,0" Background="#CCCCFF"/>
+                        <Button Content="白" Command="{Binding SetPresetColorCommand}" CommandParameter="White"
+                                Width="36" Margin="0,0,2,0"/>
+                        <Button Content="黒" Command="{Binding SetPresetColorCommand}" CommandParameter="Black"
+                                Width="36" Background="#333333" Foreground="White"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <Separator Margin="0,8,0,8"/>
+
+                <!-- 送信ボタン -->
+                <Button Content="送信" Command="{Binding SendCommand}" FontSize="14" FontWeight="Bold"
+                        Padding="8,6" HorizontalAlignment="Stretch"/>
+            </StackPanel>
+        </ScrollViewer>
+    </GroupBox>
+</UserControl>

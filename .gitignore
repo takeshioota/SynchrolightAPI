@@ -1,0 +1,43 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ===== C# / .NET =====
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+packages/
+*.nupkg
+.vs/
+*.rsuser
+
+# ドキュメント
+document/
+
+# ===== エディタ / OS =====
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# ===== 共通 =====
+*.log
+.env
+.env.local
