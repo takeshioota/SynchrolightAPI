@@ -42,7 +42,7 @@
                     <TextBox Text="{Binding Len, Converter={StaticResource ByteToHex}, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>
                 </StackPanel>
 
-                <!-- RowLen -->
+                <!-- RowLen (AA) -->
                 <StackPanel Visibility="{Binding ShowRowLen, Converter={StaticResource BoolToVis}}" Margin="0,0,0,4">
                     <TextBlock Text="行数:"/>
                     <TextBox Text="{Binding RowLen, UpdateSourceTrigger=PropertyChanged}" Width="60" HorizontalAlignment="Left"/>

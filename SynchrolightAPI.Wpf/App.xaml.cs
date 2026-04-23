@@ -44,6 +44,9 @@ public partial class App : Application
                 // BackgroundServices
                 services.AddHostedService<TxWorkerService>();
 
+                // BLE
+                services.AddSingleton<BleIdService>();
+
                 // ViewModels
                 services.AddSingleton<SendLogViewModel>();
                 services.AddSingleton<ConnectionViewModel>();
@@ -52,6 +55,7 @@ public partial class App : Application
                     new CommandPanelViewModel(
                         sp.GetRequiredService<ITransport>(),
                         sp.GetRequiredService<TransmitterSettingsViewModel>()));
+                services.AddSingleton<BleIdPanelViewModel>();
                 services.AddSingleton<MainViewModel>();
             })
             .Build();
