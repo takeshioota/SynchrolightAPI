@@ -3,46 +3,46 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:SynchrolightAPI.Wpf.Views"
         xmlns:vm="clr-namespace:SynchrolightAPI.Wpf.ViewModels"
-        Title="シンクロライト テストツール" Width="900" Height="650"
-        MinWidth="800" MinHeight="550"
+        Title="シンクロライト テストツール" Width="1000" Height="700"
+        MinWidth="900" MinHeight="600"
         d:DataContext="{d:DesignInstance vm:MainViewModel}"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d">
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*" MinHeight="200"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="180" MinHeight="100"/>
-        </Grid.RowDefinitions>
+    <TabControl>
+        <!-- タブ1: 2.4G制御 (既存) -->
+        <TabItem Header="2.4G制御">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" MinHeight="200"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="180" MinHeight="100"/>
+                </Grid.RowDefinitions>
 
-        <!-- 上部: 3カラム -->
-        <Grid Grid.Row="0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="200" MinWidth="160"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="240" MinWidth="210"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*" MinWidth="250"/>
-            </Grid.ColumnDefinitions>
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="200" MinWidth="160"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="240" MinWidth="210"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*" MinWidth="250"/>
+                    </Grid.ColumnDefinitions>
 
-            <!-- (A) 接続パネル -->
-            <views:ConnectionPanel Grid.Column="0" DataContext="{Binding Connection}" Margin="4"/>
+                    <views:ConnectionPanel Grid.Column="0" DataContext="{Binding Connection}" Margin="4"/>
+                    <GridSplitter Grid.Column="1" Width="3" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="LightGray"/>
+                    <views:TransmitterSettingsPanel Grid.Column="2" DataContext="{Binding TransmitterSettings}" Margin="4"/>
+                    <GridSplitter Grid.Column="3" Width="3" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="LightGray"/>
+                    <views:CommandPanel Grid.Column="4" DataContext="{Binding CommandPanel}" Margin="4"/>
+                </Grid>
 
-            <GridSplitter Grid.Column="1" Width="3" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="LightGray"/>
+                <GridSplitter Grid.Row="1" Height="3" HorizontalAlignment="Stretch" VerticalAlignment="Center" Background="LightGray"/>
+                <views:SendLogPanel Grid.Row="2" DataContext="{Binding SendLog}" Margin="4"/>
+            </Grid>
+        </TabItem>
 
-            <!-- (B) 送信機設定パネル -->
-            <views:TransmitterSettingsPanel Grid.Column="2" DataContext="{Binding TransmitterSettings}" Margin="4"/>
-
-            <GridSplitter Grid.Column="3" Width="3" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="LightGray"/>
-
-            <!-- (C) コマンドパネル -->
-            <views:CommandPanel Grid.Column="4" DataContext="{Binding CommandPanel}" Margin="4"/>
-        </Grid>
-
-        <GridSplitter Grid.Row="1" Height="3" HorizontalAlignment="Stretch" VerticalAlignment="Center" Background="LightGray"/>
-
-        <!-- (D) 送信ログ -->
-        <views:SendLogPanel Grid.Row="2" DataContext="{Binding SendLog}" Margin="4"/>
-    </Grid>
+        <!-- タブ2: BLE ID管理 -->
+        <TabItem Header="BLE ID管理">
+            <views:BleIdPanel DataContext="{Binding BleIdPanel}"/>
+        </TabItem>
+    </TabControl>
 </Window>

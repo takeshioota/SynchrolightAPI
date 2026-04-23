@@ -110,23 +110,43 @@ public static class LightProtocol
     }
 
     /// <summary>
-    /// A3: 行制御 (len行それぞれRGB、len=1..8想定、データはRGB×len)
-    /// フォーマット: A3 field startRowHi startRowLo len [RGB...] 0埋め cs
-    /// ※行番号は0x01開始。hi/loは仕様例が 00 01 のため big-endian で格納。
+    /// A3: フィールドゾーン定義（水平操作）— 単色版
+    /// フォーマット: A3 field startPosHi startPosLo rowLength R G B [23×0] cs
     /// </summary>
-    public static byte[] BuildA3_Rows(byte field, ushort startRow, byte len, (byte r, byte g, byte b)[] colors)
+    public static byte[] BuildA3_Rows(byte field, ushort startPos, byte rowLength, byte r, byte g, byte b)
     {
-        if (startRow < 1) throw new ArgumentOutOfRangeException(nameof(startRow), "row is 1-based.");
-        if (len == 0) throw new ArgumentOutOfRangeException(nameof(len));
+        var f = new byte[32];
+        f[0] = 0xA3;
+        f[1] = field;
+
+        // big-endian
+        f[2] = (byte)((startPos >> 8) & 0xFF);
+        f[3] = (byte)(startPos & 0xFF);
+
+        f[4] = rowLength;
+        f[5] = r;
+        f[6] = g;
+        f[7] = b;
+
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A3: フィールドゾーン定義（水平操作）— 行別色版
+    /// フォーマット: A3 field startPosHi startPosLo len [RGB×len] [0埋め] cs
+    /// len は最大8（32バイト制約: ヘッダ5 + RGB×8=24 + パディング2 + cs1 = 32）
+    /// </summary>
+    public static byte[] BuildA3_Rows(byte field, ushort startPos, byte len, (byte r, byte g, byte b)[] colors)
+    {
+        if (len == 0 || len > 8) throw new ArgumentOutOfRangeException(nameof(len), "len must be 1..8");
         if (colors == null || colors.Length != len) throw new ArgumentException("colors length must equal len.");
 
         var f = new byte[32];
         f[0] = 0xA3;
         f[1] = field;
 
-        // big-endian
-        f[2] = (byte)((startRow >> 8) & 0xFF);
-        f[3] = (byte)(startRow & 0xFF);
+        f[2] = (byte)((startPos >> 8) & 0xFF);
+        f[3] = (byte)(startPos & 0xFF);
 
         f[4] = len;
 
@@ -142,12 +162,32 @@ public static class LightProtocol
     }
 
     /// <summary>
-    /// A4: 列制御 (len列それぞれRGB)
-    /// フォーマット: A4 field startColHi startColLo len [RGB...] 0埋め cs
+    /// A4: 列データ（垂直操作）— 単色版
+    /// フォーマット: A4 field startPosHi startPosLo colLength R G B [23×0] cs
     /// </summary>
-    public static byte[] BuildA4_Cols(byte field, ushort startCol, byte len, (byte r, byte g, byte b)[] colors)
+    public static byte[] BuildA4_Cols(byte field, ushort startPos, byte colLength, byte r, byte g, byte b)
     {
-        if (startCol < 1) throw new ArgumentOutOfRangeException(nameof(startCol), "col is 1-based.");
+        var f = new byte[32];
+        f[0] = 0xA4;
+        f[1] = field;
+
+        f[2] = (byte)((startPos >> 8) & 0xFF);
+        f[3] = (byte)(startPos & 0xFF);
+
+        f[4] = colLength;
+        f[5] = r;
+        f[6] = g;
+        f[7] = b;
+
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A4: 列データ（垂直操作）— 列別色版
+    /// フォーマット: A4 field startPosHi startPosLo len [RGB×len] [0埋め] cs
+    /// </summary>
+    public static byte[] BuildA4_Cols(byte field, ushort startPos, byte len, (byte r, byte g, byte b)[] colors)
+    {
         if (len == 0) throw new ArgumentOutOfRangeException(nameof(len));
         if (colors == null || colors.Length != len) throw new ArgumentException("colors length must equal len.");
 
@@ -155,8 +195,8 @@ public static class LightProtocol
         f[0] = 0xA4;
         f[1] = field;
 
-        f[2] = (byte)((startCol >> 8) & 0xFF);
-        f[3] = (byte)(startCol & 0xFF);
+        f[2] = (byte)((startPos >> 8) & 0xFF);
+        f[3] = (byte)(startPos & 0xFF);
 
         f[4] = len;
 
@@ -172,13 +212,11 @@ public static class LightProtocol
     }
 
     /// <summary>
-    /// A0: ポイント（連続アドレス）制御：row/col開始からlen個へRGB×len
-    /// フォーマット: A0 field rowHi rowLo colHi colLo len [RGB...] 0埋め cs
+    /// A0: ファイル照明座標コマンド：row/col開始からlen個へRGB×len
+    /// フォーマット: A0 field rowHi rowLo colHi colLo len [RGB配列(24bytes)] cs
     /// </summary>
     public static byte[] BuildA0_Points(byte field, ushort startRow, ushort startCol, byte len, (byte r, byte g, byte b)[] colors)
     {
-        if (startRow < 1) throw new ArgumentOutOfRangeException(nameof(startRow));
-        if (startCol < 1) throw new ArgumentOutOfRangeException(nameof(startCol));
         if (len == 0) throw new ArgumentOutOfRangeException(nameof(len));
         if (colors == null || colors.Length != len) throw new ArgumentException("colors length must equal len.");
 
@@ -213,7 +251,6 @@ public static class LightProtocol
     {
         if (startRow < 1) throw new ArgumentOutOfRangeException(nameof(startRow));
         if (len == 0) throw new ArgumentOutOfRangeException(nameof(len));
-        if (ch < 1 || ch > 4) throw new ArgumentOutOfRangeException(nameof(ch), "ch must be 1..4");
 
         var f = new byte[32];
         f[0] = 0xA6;
@@ -227,14 +264,11 @@ public static class LightProtocol
     }
 
     /// <summary>
-    /// A8: 多列同色制御（startCol～colLen列を同じRGB）
-    /// フォーマット: A8 field startColHi startColLo colLenHi colLenLo R G B [0埋め] cs
+    /// A8: 左右エリア色制御
+    /// フォーマット: A8 field colHi colLo colLenHi colLenLo R G B [0埋め] cs
     /// </summary>
     public static byte[] BuildA8_MultiColsSameColor(byte field, ushort startCol, ushort colLen, byte r, byte g, byte b)
     {
-        if (startCol < 1) throw new ArgumentOutOfRangeException(nameof(startCol));
-        if (colLen < 1) throw new ArgumentOutOfRangeException(nameof(colLen));
-
         var f = new byte[32];
         f[0] = 0xA8;
         f[1] = field;
@@ -250,15 +284,11 @@ public static class LightProtocol
     }
 
     /// <summary>
-    /// AA: 多行同色制御（仕様書定義に従い、startRow/rowLen/RGBを入れる形で実装）
-    /// ※AAの詳細レイアウトは資料の表に従って調整してください。
-    /// ここでは「A8の行版」として実装し、必要ならオフセットを変更可能にしています。
+    /// AA: 複数行同色制御
+    /// フォーマット: AA field rowHi rowLo rowLenHi rowLenLo R G B [0埋め] cs
     /// </summary>
     public static byte[] BuildAA_MultiRowsSameColor(byte field, ushort startRow, ushort rowLen, byte r, byte g, byte b)
     {
-        if (startRow < 1) throw new ArgumentOutOfRangeException(nameof(startRow));
-        if (rowLen < 1) throw new ArgumentOutOfRangeException(nameof(rowLen));
-
         var f = new byte[32];
         f[0] = 0xAA;
         f[1] = field;
@@ -274,12 +304,30 @@ public static class LightProtocol
     }
 
     /// <summary>
-    /// AC: ブロック制御 (AC prog block R G B [0埋め] cs)
+    /// AC: ユーザーブロック番号コマンド（セクター無効）
+    /// フォーマット: AC progNo blockNo R G B [25×0] cs
     /// </summary>
     public static byte[] BuildAC_BlockColor(byte progNo, byte blockNo, byte r, byte g, byte b)
     {
         var f = new byte[32];
         f[0] = 0xAC;
+        f[1] = progNo;
+        f[2] = blockNo;
+        f[3] = r;
+        f[4] = g;
+        f[5] = b;
+
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// AE: ユーザーブロック番号コマンド（セクター有効）
+    /// フォーマット: AE progNo blockNo R G B [25×0] cs
+    /// </summary>
+    public static byte[] BuildAE_BlockColorSector(byte progNo, byte blockNo, byte r, byte g, byte b)
+    {
+        var f = new byte[32];
+        f[0] = 0xAE;
         f[1] = progNo;
         f[2] = blockNo;
         f[3] = r;

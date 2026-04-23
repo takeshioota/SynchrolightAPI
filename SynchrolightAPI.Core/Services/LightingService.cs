@@ -32,23 +32,37 @@ public class LightingService
         await _transport.EnqueueAsync(packet, ct);
     }
 
-    /// <summary>行制御 (A3): A3は1フレーム最大8行のため自動分割</summary>
+    /// <summary>水平操作 (A3): フィールドゾーン定義、水平方向に単一色で塗りつぶし。8行超は自動分割。</summary>
     public async Task SetRowColorAsync(byte field, ushort startRow, byte len, Rgb color, CancellationToken ct = default)
     {
-        const int maxA3Len = 8;
-        int remaining = len;
-        ushort currentRow = startRow;
+        const byte maxRowsPerPacket = 8;
 
-        while (remaining > 0)
+        if (len <= maxRowsPerPacket)
         {
-            byte batchLen = (byte)Math.Min(remaining, maxA3Len);
-            var target = new Target.Rows(field, currentRow, batchLen);
+            var target = new Target.Rows(field, startRow, len);
             var packet = _cmd.BuildSetColor(target, color);
-            _logger.LogDebug("A3 row={Row} len={Len}: {Hex}", currentRow, batchLen, packet.ToHex());
+            _logger.LogDebug("A3 startRow={Row} len={Len}: {Hex}", startRow, len, packet.ToHex());
             await _transport.EnqueueAsync(packet, ct);
+        }
+        else
+        {
+            _logger.LogInformation("A3 自動分割: startRow={Row} len={Len} → {Chunks}パケット",
+                startRow, len, (len + maxRowsPerPacket - 1) / maxRowsPerPacket);
 
-            currentRow += batchLen;
-            remaining -= batchLen;
+            int remaining = len;
+            ushort currentRow = startRow;
+
+            while (remaining > 0)
+            {
+                byte chunkLen = (byte)Math.Min(remaining, maxRowsPerPacket);
+                var target = new Target.Rows(field, currentRow, chunkLen);
+                var packet = _cmd.BuildSetColor(target, color);
+                _logger.LogDebug("A3 分割送信 startRow={Row} len={Len}: {Hex}", currentRow, chunkLen, packet.ToHex());
+                await _transport.EnqueueAsync(packet, ct);
+
+                currentRow += chunkLen;
+                remaining -= chunkLen;
+            }
         }
     }
 

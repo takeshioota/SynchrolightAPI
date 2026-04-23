@@ -15,10 +15,10 @@ public class CommandBuilder : ICommandBuilder
                 LightProtocol.BuildA2_GlobalColor(color.R, color.G, color.B),
 
             Target.Rows(var field, var startRow, var len) =>
-                LightProtocol.BuildA3_Rows(field, startRow, len, CreateColorArray(color, len)),
+                LightProtocol.BuildA3_Rows(field, startRow, len, color.R, color.G, color.B),
 
             Target.Cols(var field, var startCol, var len) =>
-                LightProtocol.BuildA4_Cols(field, startCol, len, CreateColorArray(color, len)),
+                LightProtocol.BuildA4_Cols(field, startCol, len, color.R, color.G, color.B),
 
             Target.Points(var field, var startRow, var startCol, var len) =>
                 LightProtocol.BuildA0_Points(field, startRow, startCol, len, CreateColorArray(color, len)),
@@ -31,6 +31,9 @@ public class CommandBuilder : ICommandBuilder
 
             Target.Block(var progNo, var blockNo) =>
                 LightProtocol.BuildAC_BlockColor(progNo, blockNo, color.R, color.G, color.B),
+
+            Target.BlockSector(var progNo, var blockNo) =>
+                LightProtocol.BuildAE_BlockColorSector(progNo, blockNo, color.R, color.G, color.B),
 
             _ => throw new ArgumentException($"Unknown target type: {target.GetType().Name}", nameof(target))
         };

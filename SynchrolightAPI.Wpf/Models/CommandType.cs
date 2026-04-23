@@ -11,4 +11,5 @@ public enum CommandType
     A8_MultiCols,
     AA_MultiRows,
     AC_Block,
+    AE_BlockSector,
 }
