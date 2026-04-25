@@ -22,6 +22,12 @@ public interface ITransport
     /// <summary>送信キューにパケットを投入 (Packet32)</summary>
     Task EnqueueAsync(Packet32 packet, CancellationToken ct = default);
 
+    /// <summary>送信キューにパケットを投入 (byte[] + SendOptions)</summary>
+    Task EnqueueAsync(byte[] packet, SendOptions options, CancellationToken ct = default);
+
+    /// <summary>送信キューにパケットを投入 (Packet32 + SendOptions)</summary>
+    Task EnqueueAsync(Packet32 packet, SendOptions options, CancellationToken ct = default);
+
     /// <summary>現在の送信状態を取得</summary>
     TransportStatus GetStatus();
 }

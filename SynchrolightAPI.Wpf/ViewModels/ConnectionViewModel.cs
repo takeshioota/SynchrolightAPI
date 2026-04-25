@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.IO.Ports;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using SynchrolightAPI.Settings;
 using SynchrolightAPI.Transport;
 using SynchrolightAPI.Wpf.Models;
 
@@ -10,6 +11,7 @@ namespace SynchrolightAPI.Wpf.ViewModels;
 public partial class ConnectionViewModel : ObservableObject
 {
     private readonly ITransport _transport;
+    private readonly SettingsService _settings;
 
     public ObservableCollection<ComPortItem> Ports { get; } = [];
 
@@ -19,19 +21,22 @@ public partial class ConnectionViewModel : ObservableObject
     [ObservableProperty]
     private string _statusText = "未接続";
 
-    public ConnectionViewModel(ITransport transport)
+    public ConnectionViewModel(ITransport transport, SettingsService settings)
     {
         _transport = transport;
+        _settings = settings;
         ScanPorts();
     }
 
     [RelayCommand]
     private void ScanPorts()
     {
+        var savedPorts = _settings.Current.SelectedPorts;
         Ports.Clear();
         foreach (var name in SerialPort.GetPortNames().OrderBy(n => n))
         {
-            Ports.Add(new ComPortItem(name, true));
+            var isSelected = savedPorts.Contains(name, StringComparer.OrdinalIgnoreCase);
+            Ports.Add(new ComPortItem(name, isSelected));
         }
         if (Ports.Count == 0)
             StatusText = "COMポートなし";
@@ -44,6 +49,9 @@ public partial class ConnectionViewModel : ObservableObject
     {
         var selected = Ports.Where(p => p.IsSelected).Select(p => p.Name).ToList();
         if (selected.Count == 0) return;
+
+        // 選択ポートを保存
+        _settings.Update(s => s.SelectedPorts = selected);
 
         await _transport.ConnectAsync(selected);
         var status = _transport.GetStatus();
