@@ -34,13 +34,34 @@
 
             <Separator Margin="0,4"/>
 
+            <!-- ステータス（Phase2/3拡張） -->
             <TextBlock Text="ステータス:" FontWeight="Bold" Margin="0,4,0,4"/>
             <TextBlock>
                 <Run Text="キュー: "/><Run Text="{Binding QueueLength, Mode=OneWay}"/>
+                <Run Text=" (優先: "/><Run Text="{Binding HighPriorityQueueLength, Mode=OneWay}"/><Run Text=")"/>
             </TextBlock>
             <TextBlock>
                 <Run Text="ポート: "/><Run Text="{Binding ConnectedPorts, Mode=OneWay}"/>
             </TextBlock>
+            <!-- 切断ポート表示 -->
+            <TextBlock Foreground="OrangeRed">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding DisconnectedPorts}" Value="0">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+                <Run Text="切断中: "/><Run Text="{Binding DisconnectedPorts, Mode=OneWay}"/>
+            </TextBlock>
+            <!-- レイテンシ -->
+            <TextBlock FontSize="11" Foreground="DarkSlateGray">
+                <Run Text="遅延: "/><Run Text="{Binding LatencyText, Mode=OneWay}"/>
+            </TextBlock>
+            <!-- エラー -->
             <TextBlock Text="{Binding LastError}" Foreground="Red" TextWrapping="Wrap">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">

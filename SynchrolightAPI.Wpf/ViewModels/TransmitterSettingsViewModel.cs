@@ -1,8 +1,10 @@
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using SynchrolightAPI.Diagnostics;
 using SynchrolightAPI.Protocol;
 using SynchrolightAPI.Services;
+using SynchrolightAPI.Settings;
 using SynchrolightAPI.Transport;
 
 namespace SynchrolightAPI.Wpf.ViewModels;
@@ -11,6 +13,8 @@ public partial class TransmitterSettingsViewModel : ObservableObject
 {
     private readonly LightingService _lighting;
     private readonly ITransport _transport;
+    private readonly SettingsService _settings;
+    private readonly LatencyTracker? _latencyTracker;
     private readonly DispatcherTimer _statusTimer;
     private DispatcherTimer? _keepAliveTimer;
     private byte[] _lastSentPacket = LightProtocol.BuildA2_GlobalColor(0, 0, 0);
@@ -29,7 +33,13 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     private int _queueLength;
 
     [ObservableProperty]
+    private int _highPriorityQueueLength;
+
+    [ObservableProperty]
     private int _connectedPorts;
+
+    [ObservableProperty]
+    private int _disconnectedPorts;
 
     [ObservableProperty]
     private string? _lastError;
@@ -43,28 +53,68 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _keepAliveStatus = "停止中";
 
-    public TransmitterSettingsViewModel(LightingService lighting, ITransport transport)
+    // レイテンシ統計
+    [ObservableProperty]
+    private string _latencyText = "-";
+
+    public TransmitterSettingsViewModel(
+        LightingService lighting,
+        ITransport transport,
+        SettingsService settings,
+        LatencyTracker? latencyTracker = null)
     {
         _lighting = lighting;
         _transport = transport;
+        _settings = settings;
+        _latencyTracker = latencyTracker;
+
+        // 保存済み設定を復元
+        RestoreSettings();
 
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _statusTimer.Tick += (_, _) => RefreshStatus();
         _statusTimer.Start();
     }
 
+    private void RestoreSettings()
+    {
+        var s = _settings.Current;
+        SelectedChannel = s.TxChannel;
+        SelectedPower = s.TxPower;
+        SelectedKeepAliveInterval = s.KeepAliveIntervalSeconds;
+        IsKeepAliveEnabled = s.KeepAliveEnabled;
+        if (IsKeepAliveEnabled) StartKeepAlive();
+    }
+
+    partial void OnSelectedChannelChanged(int value)
+    {
+        _settings.Update(s => s.TxChannel = value);
+    }
+
+    partial void OnSelectedPowerChanged(int value)
+    {
+        _settings.Update(s => s.TxPower = value);
+    }
+
+    partial void OnIsKeepAliveEnabledChanged(bool value)
+    {
+        _settings.Update(s => s.KeepAliveEnabled = value);
+    }
+
     [RelayCommand]
     private async Task SetChannelAsync()
     {
         await _transport.EnqueueAsync(
-            LightProtocol.BuildTxSetChannel((byte)SelectedChannel));
+            LightProtocol.BuildTxSetChannel((byte)SelectedChannel),
+            SendOptions.Default with { HighPriority = true });
     }
 
     [RelayCommand]
     private async Task SetPowerAsync()
     {
         await _transport.EnqueueAsync(
-            LightProtocol.BuildTxSetPower((byte)SelectedPower));
+            LightProtocol.BuildTxSetPower((byte)SelectedPower),
+            SendOptions.Default with { HighPriority = true });
     }
 
     [RelayCommand]
@@ -131,6 +181,7 @@ public partial class TransmitterSettingsViewModel : ObservableObject
 
     partial void OnSelectedKeepAliveIntervalChanged(int value)
     {
+        _settings.Update(s => s.KeepAliveIntervalSeconds = value);
         if (IsKeepAliveEnabled)
         {
             StartKeepAlive();
@@ -141,7 +192,18 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     {
         var s = _transport.GetStatus();
         QueueLength = s.QueueLength;
+        HighPriorityQueueLength = s.HighPriorityQueueLength;
         ConnectedPorts = s.ConnectedPorts;
+        DisconnectedPorts = s.DisconnectedPorts;
         LastError = s.LastError;
+
+        // レイテンシ統計更新
+        if (_latencyTracker != null)
+        {
+            var stats = _latencyTracker.GetStatistics(TimeSpan.FromSeconds(30));
+            LatencyText = stats.Count > 0
+                ? $"P50={stats.P50Ms:F1} P95={stats.P95Ms:F1} ({stats.Count}件)"
+                : "-";
+        }
     }
 }

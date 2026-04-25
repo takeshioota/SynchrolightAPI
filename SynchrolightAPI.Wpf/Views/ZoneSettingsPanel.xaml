@@ -1,0 +1,38 @@
+<UserControl x:Class="SynchrolightAPI.Wpf.Views.ZoneSettingsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="clr-namespace:SynchrolightAPI.Wpf.Converters">
+    <UserControl.Resources>
+        <conv:ByteToHexConverter x:Key="ByteToHex"/>
+    </UserControl.Resources>
+
+    <GroupBox Header="ゾーン設定 (Phase3)">
+        <DockPanel Margin="4">
+            <!-- 上部ボタン -->
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,4">
+                <Button Content="追加" Command="{Binding AddZoneCommand}" Padding="8,2" Margin="0,0,4,0"/>
+                <Button Content="削除" Command="{Binding RemoveZoneCommand}" Padding="8,2" Margin="0,0,4,0"/>
+                <Button Content="適用" Command="{Binding ApplyZonesCommand}" Padding="8,2" FontWeight="Bold"
+                        Background="#DDEEFF"/>
+            </StackPanel>
+
+            <!-- ステータス -->
+            <TextBlock DockPanel.Dock="Bottom" Text="{Binding StatusText}" Foreground="DarkGreen"
+                       FontSize="11" Margin="0,4,0,0"/>
+
+            <!-- ゾーン一覧 -->
+            <DataGrid ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedZone}"
+                      AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                      SelectionMode="Single" RowHeaderWidth="0">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="ゾーンID" Binding="{Binding ZoneId}" Width="80"/>
+                    <DataGridTextColumn Header="ポート" Binding="{Binding PortName}" Width="70"/>
+                    <DataGridTextColumn Header="CH" Binding="{Binding TxChannel}" Width="40"/>
+                    <DataGridTextColumn Header="電力" Binding="{Binding TxPower}" Width="40"/>
+                    <DataGridTextColumn Header="Field" Binding="{Binding Field, Converter={StaticResource ByteToHex}}" Width="50"/>
+                </DataGrid.Columns>
+            </DataGrid>
+        </DockPanel>
+    </GroupBox>
+</UserControl>

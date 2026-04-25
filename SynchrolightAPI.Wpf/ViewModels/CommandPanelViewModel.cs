@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SynchrolightAPI.Domain;
 using SynchrolightAPI.Protocol;
+using SynchrolightAPI.Settings;
 using SynchrolightAPI.Transport;
 using SynchrolightAPI.Wpf.Models;
 
@@ -10,6 +11,7 @@ namespace SynchrolightAPI.Wpf.ViewModels;
 public partial class CommandPanelViewModel : ObservableObject
 {
     private readonly ITransport _transport;
+    private readonly SettingsService? _settings;
 
     public CommandType[] CommandTypes { get; } = Enum.GetValues<CommandType>();
 
@@ -63,6 +65,12 @@ public partial class CommandPanelViewModel : ObservableObject
     [ObservableProperty]
     private byte _colorB;
 
+    // --- ゾーン指定（Phase3） ---
+    [ObservableProperty]
+    private string? _targetZoneId;
+
+    public string[] ZoneOptions { get; private set; } = ["(全体同報)"];
+
     // --- Visibility helpers ---
     public bool ShowField => SelectedCommand is CommandType.A0_Points or CommandType.A3_Rows or CommandType.A4_Cols
         or CommandType.A6_SetRxChannel or CommandType.A8_MultiCols or CommandType.AA_MultiRows;
@@ -93,10 +101,39 @@ public partial class CommandPanelViewModel : ObservableObject
 
     private readonly TransmitterSettingsViewModel? _transmitterSettings;
 
-    public CommandPanelViewModel(ITransport transport, TransmitterSettingsViewModel? transmitterSettings = null)
+    public CommandPanelViewModel(
+        ITransport transport,
+        TransmitterSettingsViewModel? transmitterSettings = null,
+        SettingsService? settings = null)
     {
         _transport = transport;
         _transmitterSettings = transmitterSettings;
+        _settings = settings;
+
+        // 保存済み色を復元
+        if (_settings != null)
+        {
+            var lastColor = _settings.Current.LastColor;
+            ColorR = lastColor.R;
+            ColorG = lastColor.G;
+            ColorB = lastColor.B;
+        }
+
+        // ゾーン選択肢を構築
+        RefreshZoneOptions();
+    }
+
+    /// <summary>ゾーン設定からコンボボックス選択肢を更新</summary>
+    public void RefreshZoneOptions()
+    {
+        var zones = _settings?.Current.Zones ?? [];
+        var options = new List<string> { "(全体同報)" };
+        foreach (var z in zones)
+        {
+            options.Add($"{z.ZoneId} ({z.PortName})");
+        }
+        ZoneOptions = options.ToArray();
+        OnPropertyChanged(nameof(ZoneOptions));
     }
 
     [RelayCommand]
@@ -125,8 +162,17 @@ public partial class CommandPanelViewModel : ObservableObject
             _ => throw new InvalidOperationException()
         };
 
-        await _transport.EnqueueAsync(packet);
+        // ゾーン指定付き送信
+        var zoneId = ResolveZoneId();
+        var options = zoneId != null
+            ? SendOptions.Default with { TargetZoneId = zoneId }
+            : SendOptions.Default;
+
+        await _transport.EnqueueAsync(packet, options);
         _transmitterSettings?.UpdateLastSentPacket(packet);
+
+        // 色を保存
+        SaveLastColor();
     }
 
     [RelayCommand]
@@ -144,6 +190,22 @@ public partial class CommandPanelViewModel : ObservableObject
         ColorR = rgb.R;
         ColorG = rgb.G;
         ColorB = rgb.B;
+        SaveLastColor();
+    }
+
+    private void SaveLastColor()
+    {
+        _settings?.Update(s => s.LastColor = new RgbSetting(ColorR, ColorG, ColorB));
+    }
+
+    private string? ResolveZoneId()
+    {
+        if (string.IsNullOrEmpty(TargetZoneId) || TargetZoneId == "(全体同報)")
+            return null;
+
+        // "Zone1 (COM4)" → "Zone1"
+        var spaceIdx = TargetZoneId.IndexOf(' ');
+        return spaceIdx > 0 ? TargetZoneId[..spaceIdx] : TargetZoneId;
     }
 
     private (byte r, byte g, byte b)[] CreateColorArray(int len)

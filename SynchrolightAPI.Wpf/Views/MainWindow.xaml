@@ -44,5 +44,10 @@
         <TabItem Header="BLE ID管理">
             <views:BleIdPanel DataContext="{Binding BleIdPanel}"/>
         </TabItem>
+
+        <!-- タブ3: ゾーン設定 (Phase3) -->
+        <TabItem Header="ゾーン設定">
+            <views:ZoneSettingsPanel DataContext="{Binding ZoneSettings}" Margin="8"/>
+        </TabItem>
     </TabControl>
 </Window>

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Ports;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
@@ -6,19 +7,25 @@ using SynchrolightAPI.Protocol;
 namespace SynchrolightAPI.Transport;
 
 /// <summary>
-/// Channel送信キュー＋マルチポート同報トランスポート
+/// Channel送信キュー（2チャネル: 高優先/通常）＋マルチポート同報/ルーティングトランスポート
 /// </summary>
 public class MultiPortTransport : ITransport, IDisposable
 {
     private readonly ILogger<MultiPortTransport> _logger;
-    private readonly Channel<byte[]> _channel;
+    private readonly Channel<SendEnvelope> _highPriorityChannel;
+    private readonly Channel<SendEnvelope> _normalChannel;
     private readonly List<SerialPort> _ports = [];
+    private readonly HashSet<string> _expectedPortNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
+    private readonly ZoneRouter? _zoneRouter;
     private string? _lastError;
     private bool _disposed;
 
-    /// <summary>キューのReaderを公開（TxWorkerServiceがDequeueに使用）</summary>
-    internal ChannelReader<byte[]> Reader => _channel.Reader;
+    /// <summary>高優先キューのReader（TxWorkerServiceが使用）</summary>
+    internal ChannelReader<SendEnvelope> HighPriorityReader => _highPriorityChannel.Reader;
+
+    /// <summary>通常キューのReader（TxWorkerServiceが使用）</summary>
+    internal ChannelReader<SendEnvelope> NormalReader => _normalChannel.Reader;
 
     /// <summary>接続中のSerialPort一覧（TxWorkerServiceが送信に使用）</summary>
     internal IReadOnlyList<SerialPort> ConnectedPorts
@@ -38,10 +45,85 @@ public class MultiPortTransport : ITransport, IDisposable
         _lastError = error;
     }
 
-    public MultiPortTransport(ILogger<MultiPortTransport> logger, int queueCapacity = 256)
+    /// <summary>ポートを切断済みとしてマーク（TxWorkerServiceから呼び出し）</summary>
+    internal void MarkPortDisconnected(string portName)
+    {
+        lock (_lock)
+        {
+            var sp = _ports.FirstOrDefault(p =>
+                string.Equals(p.PortName, portName, StringComparison.OrdinalIgnoreCase));
+
+            if (sp != null)
+            {
+                try
+                {
+                    if (sp.IsOpen) sp.Close();
+                }
+                catch { /* ignore close errors */ }
+
+                _logger.LogWarning("ポート {PortName} を切断済みとしてマーク", portName);
+            }
+        }
+    }
+
+    /// <summary>切断されたポートの再接続を試行</summary>
+    internal bool TryReconnectPort(string portName)
+    {
+        lock (_lock)
+        {
+            var existing = _ports.FirstOrDefault(p =>
+                string.Equals(p.PortName, portName, StringComparison.OrdinalIgnoreCase));
+
+            if (existing != null)
+            {
+                if (existing.IsOpen) return true; // already connected
+
+                try
+                {
+                    existing.Dispose();
+                    _ports.Remove(existing);
+                }
+                catch { /* ignore */ }
+            }
+
+            try
+            {
+                var sp = new SerialPort(portName, 115200, Parity.None, 8, StopBits.One)
+                {
+                    Handshake = Handshake.None,
+                    ReadTimeout = 500,
+                    WriteTimeout = 500
+                };
+                sp.Open();
+                _ports.Add(sp);
+                _logger.LogInformation("COMポート {PortName} を再接続しました", portName);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "COMポート {PortName} の再接続に失敗", portName);
+                _lastError = $"{portName}: reconnect failed - {ex.Message}";
+                return false;
+            }
+        }
+    }
+
+    public MultiPortTransport(
+        ILogger<MultiPortTransport> logger,
+        int queueCapacity = 256,
+        ZoneRouter? zoneRouter = null)
     {
         _logger = logger;
-        _channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(queueCapacity)
+        _zoneRouter = zoneRouter;
+
+        _highPriorityChannel = Channel.CreateBounded<SendEnvelope>(new BoundedChannelOptions(64)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        _normalChannel = Channel.CreateBounded<SendEnvelope>(new BoundedChannelOptions(queueCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
@@ -57,6 +139,27 @@ public class MultiPortTransport : ITransport, IDisposable
         }
     }
 
+    /// <summary>接続を期待するポート名一覧</summary>
+    internal IReadOnlySet<string> ExpectedPortNames
+    {
+        get
+        {
+            lock (_lock) { return _expectedPortNames.ToHashSet(StringComparer.OrdinalIgnoreCase); }
+        }
+    }
+
+    /// <summary>切断中のポート数</summary>
+    internal int DisconnectedPortCount
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _expectedPortNames.Count - _ports.Count(p => p.IsOpen);
+            }
+        }
+    }
+
     public Task ConnectAsync(IEnumerable<string> portNames, CancellationToken ct = default)
     {
         lock (_lock)
@@ -64,6 +167,7 @@ public class MultiPortTransport : ITransport, IDisposable
             foreach (var name in portNames)
             {
                 ct.ThrowIfCancellationRequested();
+                _expectedPortNames.Add(name);
 
                 try
                 {
@@ -108,18 +212,60 @@ public class MultiPortTransport : ITransport, IDisposable
                 }
             }
             _ports.Clear();
+            _expectedPortNames.Clear();
         }
         return Task.CompletedTask;
     }
 
-    public async Task EnqueueAsync(byte[] packet, CancellationToken ct = default)
+    // --- EnqueueAsync: 後方互換（SendOptionsなし） ---
+
+    public Task EnqueueAsync(byte[] packet, CancellationToken ct = default)
+        => EnqueueAsync(packet, SendOptions.Default, ct);
+
+    public Task EnqueueAsync(Packet32 packet, CancellationToken ct = default)
+        => EnqueueAsync(packet.Data, SendOptions.Default, ct);
+
+    // --- EnqueueAsync: SendOptions付き ---
+
+    public async Task EnqueueAsync(byte[] packet, SendOptions options, CancellationToken ct = default)
     {
-        await _channel.Writer.WriteAsync(packet, ct);
+        var targetPorts = _zoneRouter?.ResolveTargetPorts(packet, options);
+
+        var envelope = new SendEnvelope(
+            Packet: packet,
+            Options: options,
+            TargetPortNames: targetPorts,
+            EnqueuedAtTicks: Stopwatch.GetTimestamp(),
+            OperationId: null
+        );
+
+        var channel = options.HighPriority ? _highPriorityChannel : _normalChannel;
+        await channel.Writer.WriteAsync(envelope, ct);
     }
 
-    public async Task EnqueueAsync(Packet32 packet, CancellationToken ct = default)
+    public Task EnqueueAsync(Packet32 packet, SendOptions options, CancellationToken ct = default)
+        => EnqueueAsync(packet.Data, options, ct);
+
+    /// <summary>OperationId付きでエンキュー（LightingService等から使用）</summary>
+    internal async Task EnqueueWithContextAsync(
+        byte[] packet, SendOptions options, string? operationId, CancellationToken ct = default)
     {
-        await _channel.Writer.WriteAsync(packet.Data, ct);
+        var targetPorts = _zoneRouter?.ResolveTargetPorts(packet, options);
+
+        var envelope = new SendEnvelope(
+            Packet: packet,
+            Options: options,
+            TargetPortNames: targetPorts,
+            EnqueuedAtTicks: Stopwatch.GetTimestamp(),
+            OperationId: operationId
+        );
+
+        var channel = options.HighPriority ? _highPriorityChannel : _normalChannel;
+        await channel.Writer.WriteAsync(envelope, ct);
+
+        _logger.LogDebug("Enqueue [{OpId}] priority={Priority} queue={Queue}",
+            operationId ?? "-", options.HighPriority ? "HIGH" : "NORMAL",
+            channel.Reader.Count);
     }
 
     public TransportStatus GetStatus()
@@ -127,8 +273,10 @@ public class MultiPortTransport : ITransport, IDisposable
         lock (_lock)
         {
             return new TransportStatus(
-                QueueLength: _channel.Reader.Count,
+                QueueLength: _normalChannel.Reader.Count,
+                HighPriorityQueueLength: _highPriorityChannel.Reader.Count,
                 ConnectedPorts: _ports.Count(p => p.IsOpen),
+                DisconnectedPorts: Math.Max(0, _expectedPortNames.Count - _ports.Count(p => p.IsOpen)),
                 LastError: _lastError
             );
         }
@@ -139,7 +287,8 @@ public class MultiPortTransport : ITransport, IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        _channel.Writer.TryComplete();
+        _highPriorityChannel.Writer.TryComplete();
+        _normalChannel.Writer.TryComplete();
         DisconnectAsync().GetAwaiter().GetResult();
         GC.SuppressFinalize(this);
     }

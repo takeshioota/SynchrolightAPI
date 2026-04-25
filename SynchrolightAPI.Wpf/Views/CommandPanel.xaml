@@ -114,6 +114,13 @@
 
                 <Separator Margin="0,8,0,8"/>
 
+                <!-- ゾーン指定（Phase3） -->
+                <StackPanel Margin="0,0,0,8">
+                    <TextBlock Text="送信先ゾーン:" Margin="0,0,0,2"/>
+                    <ComboBox ItemsSource="{Binding ZoneOptions}" SelectedItem="{Binding TargetZoneId}"
+                              Margin="0,0,0,4"/>
+                </StackPanel>
+
                 <!-- 送信ボタン -->
                 <Button Content="送信" Command="{Binding SendCommand}" FontSize="14" FontWeight="Bold"
                         Padding="8,6" HorizontalAlignment="Stretch"/>
