@@ -17,7 +17,7 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     private readonly LatencyTracker? _latencyTracker;
     private readonly DispatcherTimer _statusTimer;
     private DispatcherTimer? _keepAliveTimer;
-    private byte[] _lastSentPacket = LightProtocol.BuildA2_GlobalColor(0, 0, 0);
+    private byte[] _lastSentPacket = LightProtocol.BuildA2_GlobalColor(0x01, 0, 0, 0);
 
     public int[] ChannelOptions { get; } = [1, 2, 3, 4];
     public int[] PowerOptions { get; } = [0, 1, 2, 3];

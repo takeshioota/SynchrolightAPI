@@ -287,7 +287,7 @@ public class Phase2Phase3TestService : BackgroundService
         );
 
         await _transport.EnqueueAsync(
-            Protocol.LightProtocol.BuildA2_GlobalColor(255, 0, 0),
+            Protocol.LightProtocol.BuildA2_GlobalColor(0x01, 255, 0, 0),
             expiredOptions, ct);
 
         // 有効なパケットも投入

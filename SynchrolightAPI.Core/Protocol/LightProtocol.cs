@@ -76,13 +76,14 @@ public static class LightProtocol
     }
 
     /// <summary>
-    /// A2: 全体一括色 (A2 01 R G B [0埋め] cs)
+    /// A2: 全体一括色 (A2 field R G B [0埋め] cs)
+    /// field=0x01: ID書き込み済み端末, field=0x00: ID未書き込み端末
     /// </summary>
-    public static byte[] BuildA2_GlobalColor(byte r, byte g, byte b)
+    public static byte[] BuildA2_GlobalColor(byte field, byte r, byte g, byte b)
     {
         var f = new byte[32];
         f[0] = 0xA2;
-        f[1] = 0x01;
+        f[1] = field;
         f[2] = r;
         f[3] = g;
         f[4] = b;

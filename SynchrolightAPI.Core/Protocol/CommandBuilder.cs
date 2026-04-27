@@ -11,8 +11,8 @@ public class CommandBuilder : ICommandBuilder
     {
         return target switch
         {
-            Target.All =>
-                LightProtocol.BuildA2_GlobalColor(color.R, color.G, color.B),
+            Target.All(var field) =>
+                LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B),
 
             Target.Rows(var field, var startRow, var len) =>
                 LightProtocol.BuildA3_Rows(field, startRow, len, color.R, color.G, color.B),
