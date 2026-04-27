@@ -72,7 +72,7 @@ public partial class CommandPanelViewModel : ObservableObject
     public string[] ZoneOptions { get; private set; } = ["(全体同報)"];
 
     // --- Visibility helpers ---
-    public bool ShowField => SelectedCommand is CommandType.A0_Points or CommandType.A3_Rows or CommandType.A4_Cols
+    public bool ShowField => SelectedCommand is CommandType.A2_GlobalColor or CommandType.A0_Points or CommandType.A3_Rows or CommandType.A4_Cols
         or CommandType.A6_SetRxChannel or CommandType.A8_MultiCols or CommandType.AA_MultiRows;
     public bool ShowStartRow => SelectedCommand is CommandType.A0_Points or CommandType.A3_Rows
         or CommandType.A6_SetRxChannel or CommandType.AA_MultiRows;
@@ -144,7 +144,7 @@ public partial class CommandPanelViewModel : ObservableObject
             CommandType.A0_Points => LightProtocol.BuildA0_Points(
                 Field, StartRow, StartCol, Len, CreateColorArray(Len)),
             CommandType.A1_PlaySequence => LightProtocol.BuildA1_PlaySequence(FrameNo),
-            CommandType.A2_GlobalColor => LightProtocol.BuildA2_GlobalColor(ColorR, ColorG, ColorB),
+            CommandType.A2_GlobalColor => LightProtocol.BuildA2_GlobalColor(Field, ColorR, ColorG, ColorB),
             CommandType.A3_Rows => LightProtocol.BuildA3_Rows(
                 Field, StartRow, Len, ColorR, ColorG, ColorB),
             CommandType.A4_Cols => LightProtocol.BuildA4_Cols(

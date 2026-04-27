@@ -90,7 +90,7 @@ public class DiagnosticService : BackgroundService
             sp.Write(fb, 0, fb.Length);
 
             // 全体を緑（仕様書と同じ）
-            var a2 = LightProtocol.BuildA2_GlobalColor(0x00, 0xFF, 0x00);
+            var a2 = LightProtocol.BuildA2_GlobalColor(0x01, 0x00, 0xFF, 0x00);
             _logger.LogInformation("[{Port}] A2送信(緑): {Hex}", portName, LightProtocol.ToHex(a2));
             sp.Write(a2, 0, a2.Length);
 
@@ -114,7 +114,7 @@ public class DiagnosticService : BackgroundService
             }
 
             // 消灯
-            var off = LightProtocol.BuildA2_GlobalColor(0x00, 0x00, 0x00);
+            var off = LightProtocol.BuildA2_GlobalColor(0x01, 0x00, 0x00, 0x00);
             sp.Write(off, 0, off.Length);
             _logger.LogInformation("[{Port}] 消灯送信", portName);
         }
