@@ -19,6 +19,7 @@ htmlcov/
 # ===== C# / .NET =====
 bin/
 obj/
+publish/
 *.user
 *.suo
 *.userosscache
