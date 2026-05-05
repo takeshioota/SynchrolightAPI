@@ -3,16 +3,29 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:SynchrolightAPI.Wpf.Views"
         xmlns:vm="clr-namespace:SynchrolightAPI.Wpf.ViewModels"
-        Title="シンクロライト テストツール" Width="1000" Height="700"
+        Title="Synchrolight Controller" Width="1050" Height="720"
         MinWidth="900" MinHeight="600"
+        Background="{StaticResource SurfaceBrush}"
         d:DataContext="{d:DesignInstance vm:MainViewModel}"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d">
-    <TabControl>
-        <!-- タブ1: 2.4G制御 (既存) -->
-        <TabItem Header="2.4G制御">
-            <Grid>
+    <TabControl Background="Transparent" BorderThickness="0" Padding="4">
+        <TabControl.Resources>
+            <Style TargetType="TabItem">
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="Padding" Value="12,6"/>
+            </Style>
+        </TabControl.Resources>
+
+        <TabItem>
+            <TabItem.Header>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#x1F4E1;" Margin="0,0,6,0"/>
+                    <TextBlock Text="2.4G &#x5236;&#x5FA1;"/>
+                </StackPanel>
+            </TabItem.Header>
+            <Grid Margin="4">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" MinHeight="200"/>
                     <RowDefinition Height="Auto"/>
@@ -23,31 +36,51 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="200" MinWidth="160"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="240" MinWidth="210"/>
+                        <ColumnDefinition Width="250" MinWidth="220"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*" MinWidth="250"/>
+                        <ColumnDefinition Width="*" MinWidth="280"/>
                     </Grid.ColumnDefinitions>
 
                     <views:ConnectionPanel Grid.Column="0" DataContext="{Binding Connection}" Margin="4"/>
-                    <GridSplitter Grid.Column="1" Width="3" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="LightGray"/>
+                    <GridSplitter Grid.Column="1" Width="3" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="#D1D5DB"/>
                     <views:TransmitterSettingsPanel Grid.Column="2" DataContext="{Binding TransmitterSettings}" Margin="4"/>
-                    <GridSplitter Grid.Column="3" Width="3" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="LightGray"/>
+                    <GridSplitter Grid.Column="3" Width="3" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="#D1D5DB"/>
                     <views:CommandPanel Grid.Column="4" DataContext="{Binding CommandPanel}" Margin="4"/>
                 </Grid>
 
-                <GridSplitter Grid.Row="1" Height="3" HorizontalAlignment="Stretch" VerticalAlignment="Center" Background="LightGray"/>
+                <GridSplitter Grid.Row="1" Height="3" HorizontalAlignment="Stretch" VerticalAlignment="Center" Background="#D1D5DB"/>
                 <views:SendLogPanel Grid.Row="2" DataContext="{Binding SendLog}" Margin="4"/>
             </Grid>
         </TabItem>
 
-        <!-- タブ2: BLE ID管理 -->
-        <TabItem Header="BLE ID管理">
+        <TabItem>
+            <TabItem.Header>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#x1F4F6;" Margin="0,0,6,0"/>
+                    <TextBlock Text="BLE ID&#x7BA1;&#x7406;"/>
+                </StackPanel>
+            </TabItem.Header>
             <views:BleIdPanel DataContext="{Binding BleIdPanel}"/>
         </TabItem>
 
-        <!-- タブ3: ゾーン設定 (Phase3) -->
-        <TabItem Header="ゾーン設定">
+        <TabItem>
+            <TabItem.Header>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#x2699;" Margin="0,0,6,0"/>
+                    <TextBlock Text="&#x30BE;&#x30FC;&#x30F3;&#x8A2D;&#x5B9A;"/>
+                </StackPanel>
+            </TabItem.Header>
             <views:ZoneSettingsPanel DataContext="{Binding ZoneSettings}" Margin="8"/>
+        </TabItem>
+
+        <TabItem>
+            <TabItem.Header>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#x1F3AC;" Margin="0,0,6,0"/>
+                    <TextBlock Text="&#x30B7;&#x30FC;&#x30B1;&#x30F3;&#x30B9;"/>
+                </StackPanel>
+            </TabItem.Header>
+            <views:SequencePanel DataContext="{Binding SequencePanel}" Margin="8"/>
         </TabItem>
     </TabControl>
 </Window>

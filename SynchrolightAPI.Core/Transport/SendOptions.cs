@@ -6,7 +6,12 @@ namespace SynchrolightAPI.Transport;
 public record SendOptions(
     bool HighPriority = false,
     string? TargetZoneId = null,
-    DateTimeOffset? Deadline = null
+    DateTimeOffset? Deadline = null,
+    /// <summary>
+    /// コマンド単位の再送回数オーバーライド。
+    /// null=グローバル設定に従う, 1=再送なし(1回のみ送信)
+    /// </summary>
+    int? RetransmitCount = null
 )
 {
     public static readonly SendOptions Default = new();

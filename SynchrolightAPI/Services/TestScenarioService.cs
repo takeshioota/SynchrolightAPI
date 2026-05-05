@@ -36,7 +36,7 @@ public class TestScenarioService : BackgroundService
         ("白", Rgb.White),
     ];
 
-    private const byte Field = 0x01;
+    private const byte Field = 0x00;
     private const int MaxRow = 200;
     private const int RowGroupSize = 10;
 

@@ -28,6 +28,9 @@ public interface ITransport
     /// <summary>送信キューにパケットを投入 (Packet32 + SendOptions)</summary>
     Task EnqueueAsync(Packet32 packet, SendOptions options, CancellationToken ct = default);
 
+    /// <summary>通常キューの未送信パケットを破棄する</summary>
+    void FlushQueue();
+
     /// <summary>現在の送信状態を取得</summary>
     TransportStatus GetStatus();
 }

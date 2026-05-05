@@ -268,6 +268,12 @@ public class MultiPortTransport : ITransport, IDisposable
             channel.Reader.Count);
     }
 
+    public void FlushQueue()
+    {
+        while (_normalChannel.Reader.TryRead(out _)) { }
+        _logger.LogInformation("通常キューをフラッシュしました");
+    }
+
     public TransportStatus GetStatus()
     {
         lock (_lock)
