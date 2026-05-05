@@ -3,28 +3,32 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SynchrolightAPI.Diagnostics;
+using SynchrolightAPI.Settings;
 
 namespace SynchrolightAPI.Transport;
 
 /// <summary>
-/// BackgroundService: 2チャネル優先度制御 + ルーティング送信
+/// BackgroundService: 2チャネル優先度制御 + ルーティング送信 + 再送制御
 /// </summary>
 public class TxWorkerService : BackgroundService
 {
     private readonly MultiPortTransport _transport;
     private readonly ILogger<TxWorkerService> _logger;
     private readonly LatencyTracker? _latencyTracker;
+    private readonly SettingsService? _settings;
     private readonly int _sendIntervalMs;
 
     public TxWorkerService(
         MultiPortTransport transport,
         ILogger<TxWorkerService> logger,
         IConfiguration configuration,
-        LatencyTracker? latencyTracker = null)
+        LatencyTracker? latencyTracker = null,
+        SettingsService? settings = null)
     {
         _transport = transport;
         _logger = logger;
         _latencyTracker = latencyTracker;
+        _settings = settings;
         _sendIntervalMs = configuration.GetValue<int>("SerialPort:SendIntervalMs", 5);
     }
 
@@ -77,37 +81,53 @@ public class TxWorkerService : BackgroundService
         }
     }
 
-    private Task SendToTargetPorts(SendEnvelope envelope)
+    private async Task SendToTargetPorts(SendEnvelope envelope)
     {
         var allPorts = _transport.ConnectedPorts;
         var targetPorts = FilterPorts(allPorts, envelope.TargetPortNames);
 
-        foreach (var sp in targetPorts)
+        // 再送回数: コマンド単位のオーバーライド → グローバル設定 → デフォルト3回
+        var retransmitCount = envelope.Options.RetransmitCount
+            ?? _settings?.Current.RetransmitCount
+            ?? 3;
+        var retransmitIntervalMs = _settings?.Current.RetransmitIntervalMs ?? 5;
+
+        for (int attempt = 0; attempt < retransmitCount; attempt++)
         {
-            try
+            foreach (var sp in targetPorts)
             {
-                sp.Write(envelope.Packet, 0, envelope.Packet.Length);
+                try
+                {
+                    sp.Write(envelope.Packet, 0, envelope.Packet.Length);
 
-                var latencyMs = envelope.GetElapsedMs();
-                _latencyTracker?.Record(sp.PortName, latencyMs);
+                    if (attempt == 0)
+                    {
+                        var latencyMs = envelope.GetElapsedMs();
+                        _latencyTracker?.Record(sp.PortName, latencyMs);
 
-                _logger.LogDebug("送信完了 [{OpId}] → {Port} ({Latency:F1}ms)",
-                    envelope.OperationId ?? "-", sp.PortName, latencyMs);
+                        _logger.LogDebug("送信完了 [{OpId}] → {Port} ({Latency:F1}ms) 再送{Attempt}/{Total}",
+                            envelope.OperationId ?? "-", sp.PortName, latencyMs, attempt + 1, retransmitCount);
+                    }
+                }
+                catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogError(ex, "ポート {Port} 切断検出 [{OpId}]", sp.PortName, envelope.OperationId ?? "-");
+                    _transport.MarkPortDisconnected(sp.PortName);
+                    _transport.SetLastError($"{sp.PortName}: disconnected - {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "ポート {Port} への送信失敗 [{OpId}]", sp.PortName, envelope.OperationId ?? "-");
+                    _transport.SetLastError($"{sp.PortName}: {ex.Message}");
+                }
             }
-            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+
+            // 最終回は待機不要
+            if (attempt < retransmitCount - 1 && retransmitIntervalMs > 0)
             {
-                _logger.LogError(ex, "ポート {Port} 切断検出 [{OpId}]", sp.PortName, envelope.OperationId ?? "-");
-                _transport.MarkPortDisconnected(sp.PortName);
-                _transport.SetLastError($"{sp.PortName}: disconnected - {ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "ポート {Port} への送信失敗 [{OpId}]", sp.PortName, envelope.OperationId ?? "-");
-                _transport.SetLastError($"{sp.PortName}: {ex.Message}");
+                await Task.Delay(retransmitIntervalMs);
             }
         }
-
-        return Task.CompletedTask;
     }
 
     private static IReadOnlyList<SerialPort> FilterPorts(

@@ -6,6 +6,7 @@ using SynchrolightAPI.Protocol;
 using SynchrolightAPI.Services;
 using SynchrolightAPI.Settings;
 using SynchrolightAPI.Transport;
+using SynchrolightAPI.Wpf.Models;
 
 namespace SynchrolightAPI.Wpf.ViewModels;
 
@@ -16,12 +17,31 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     private readonly SettingsService _settings;
     private readonly LatencyTracker? _latencyTracker;
     private readonly DispatcherTimer _statusTimer;
-    private DispatcherTimer? _keepAliveTimer;
-    private byte[] _lastSentPacket = LightProtocol.BuildA2_GlobalColor(0x01, 0, 0, 0);
+    private CancellationTokenSource? _keepAliveCts;
+    private byte[] _lastSentPacket = LightProtocol.BuildA2_GlobalColor(0x00, 0, 0, 0);
 
     public int[] ChannelOptions { get; } = [1, 2, 3, 4];
     public int[] PowerOptions { get; } = [0, 1, 2, 3];
-    public int[] KeepAliveIntervalOptions { get; } = [60, 120, 180, 300, 480];
+    public IntervalOption[] KeepAliveIntervalOptions { get; } =
+    [
+        new(0.04, "40ms"),
+        new(0.06, "60ms"),
+        new(0.08, "80ms"),
+        new(0.1,  "100ms"),
+        new(0.2,  "200ms"),
+        new(0.5,  "500ms"),
+        new(1,    "1秒"),
+        new(5,    "5秒"),
+        new(10,   "10秒"),
+        new(30,   "30秒"),
+        new(60,   "60秒"),
+        new(120,  "120秒"),
+        new(180,  "180秒"),
+        new(300,  "300秒"),
+        new(480,  "480秒"),
+    ];
+    public int[] RetransmitCountOptions { get; } = [1, 2, 3, 4, 5];
+    public int[] RetransmitIntervalOptions { get; } = [5, 7, 10];
 
     [ObservableProperty]
     private int _selectedChannel = 4;
@@ -48,10 +68,17 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     private bool _isKeepAliveEnabled;
 
     [ObservableProperty]
-    private int _selectedKeepAliveInterval = 120;
+    private double _selectedKeepAliveInterval = 120;
 
     [ObservableProperty]
     private string _keepAliveStatus = "停止中";
+
+    // 再送設定
+    [ObservableProperty]
+    private int _selectedRetransmitCount = 3;
+
+    [ObservableProperty]
+    private int _selectedRetransmitInterval = 5;
 
     // レイテンシ統計
     [ObservableProperty]
@@ -83,6 +110,8 @@ public partial class TransmitterSettingsViewModel : ObservableObject
         SelectedPower = s.TxPower;
         SelectedKeepAliveInterval = s.KeepAliveIntervalSeconds;
         IsKeepAliveEnabled = s.KeepAliveEnabled;
+        SelectedRetransmitCount = s.RetransmitCount;
+        SelectedRetransmitInterval = s.RetransmitIntervalMs;
         if (IsKeepAliveEnabled) StartKeepAlive();
     }
 
@@ -99,6 +128,16 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     partial void OnIsKeepAliveEnabledChanged(bool value)
     {
         _settings.Update(s => s.KeepAliveEnabled = value);
+    }
+
+    partial void OnSelectedRetransmitCountChanged(int value)
+    {
+        _settings.Update(s => s.RetransmitCount = value);
+    }
+
+    partial void OnSelectedRetransmitIntervalChanged(int value)
+    {
+        _settings.Update(s => s.RetransmitIntervalMs = value);
     }
 
     [RelayCommand]
@@ -147,19 +186,36 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     private void StartKeepAlive()
     {
         StopKeepAlive();
-        _keepAliveTimer = new DispatcherTimer
+        _keepAliveCts = new CancellationTokenSource();
+        var interval = TimeSpan.FromSeconds(SelectedKeepAliveInterval);
+        var token = _keepAliveCts.Token;
+
+        _ = Task.Run(async () =>
         {
-            Interval = TimeSpan.FromSeconds(SelectedKeepAliveInterval)
-        };
-        _keepAliveTimer.Tick += async (_, _) => await SendKeepAliveAsync();
-        _keepAliveTimer.Start();
-        KeepAliveStatus = $"動作中 ({SelectedKeepAliveInterval}秒間隔)";
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(interval, token);
+                    await SendKeepAliveAsync();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // 正常停止
+            }
+        }, token);
+
+        KeepAliveStatus = SelectedKeepAliveInterval >= 1
+            ? $"動作中 ({SelectedKeepAliveInterval:G}秒間隔)"
+            : $"動作中 ({SelectedKeepAliveInterval * 1000:F0}ms間隔)";
     }
 
     private void StopKeepAlive()
     {
-        _keepAliveTimer?.Stop();
-        _keepAliveTimer = null;
+        _keepAliveCts?.Cancel();
+        _keepAliveCts?.Dispose();
+        _keepAliveCts = null;
         KeepAliveStatus = "停止中";
     }
 
@@ -179,7 +235,7 @@ public partial class TransmitterSettingsViewModel : ObservableObject
         }
     }
 
-    partial void OnSelectedKeepAliveIntervalChanged(int value)
+    partial void OnSelectedKeepAliveIntervalChanged(double value)
     {
         _settings.Update(s => s.KeepAliveIntervalSeconds = value);
         if (IsKeepAliveEnabled)

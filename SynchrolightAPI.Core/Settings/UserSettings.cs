@@ -17,11 +17,17 @@ public class UserSettings
     /// <summary>最終選択色</summary>
     public RgbSetting LastColor { get; set; } = new(255, 0, 0);
 
-    /// <summary>KeepAlive間隔（秒）</summary>
-    public int KeepAliveIntervalSeconds { get; set; } = 120;
+    /// <summary>KeepAlive間隔（秒、小数可）</summary>
+    public double KeepAliveIntervalSeconds { get; set; } = 120;
 
     /// <summary>KeepAlive有効</summary>
     public bool KeepAliveEnabled { get; set; }
+
+    /// <summary>再送回数 (仕様: 3〜5回)</summary>
+    public int RetransmitCount { get; set; } = 3;
+
+    /// <summary>再送間隔ミリ秒 (仕様: 5〜10ms)</summary>
+    public int RetransmitIntervalMs { get; set; } = 5;
 
     /// <summary>ゾーン設定</summary>
     public List<ZoneSettingEntry> Zones { get; set; } = [];

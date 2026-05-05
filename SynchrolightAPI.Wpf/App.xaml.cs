@@ -65,6 +65,11 @@ public partial class App : Application
                         sp.GetRequiredService<ITransport>(),
                         sp.GetRequiredService<ILogger<LightingService>>(),
                         sp.GetRequiredService<CommandThrottler>()));
+                services.AddSingleton<InterpolationService>();
+                services.AddSingleton<EffectScheduler>();
+                services.AddSingleton<EffectEngine>();
+                services.AddSingleton<SequenceStore>();
+                services.AddSingleton<SequencePlayer>();
 
                 // BackgroundServices
                 services.AddHostedService<TxWorkerService>(sp =>
@@ -72,7 +77,8 @@ public partial class App : Application
                         sp.GetRequiredService<MultiPortTransport>(),
                         sp.GetRequiredService<ILogger<TxWorkerService>>(),
                         sp.GetRequiredService<IConfiguration>(),
-                        sp.GetRequiredService<LatencyTracker>()));
+                        sp.GetRequiredService<LatencyTracker>(),
+                        sp.GetRequiredService<SettingsService>()));
                 services.AddHostedService<PortHealthMonitor>();
 
                 // BLE
@@ -94,8 +100,11 @@ public partial class App : Application
                     new CommandPanelViewModel(
                         sp.GetRequiredService<ITransport>(),
                         sp.GetRequiredService<TransmitterSettingsViewModel>(),
-                        sp.GetRequiredService<SettingsService>()));
+                        sp.GetRequiredService<SettingsService>(),
+                        sp.GetRequiredService<EffectEngine>(),
+                        sp.GetRequiredService<EffectScheduler>()));
                 services.AddSingleton<BleIdPanelViewModel>();
+                services.AddSingleton<SequencePanelViewModel>();
                 services.AddSingleton<ZoneSettingsViewModel>(sp =>
                     new ZoneSettingsViewModel(
                         sp.GetRequiredService<SettingsService>(),

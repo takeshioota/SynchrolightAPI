@@ -26,11 +26,27 @@
             <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                 <CheckBox Content="有効" IsChecked="{Binding IsKeepAliveEnabled}"
                           Command="{Binding ToggleKeepAliveCommand}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <ComboBox ItemsSource="{Binding KeepAliveIntervalOptions}" SelectedItem="{Binding SelectedKeepAliveInterval}"
-                          Width="60" Margin="0,0,4,0"/>
-                <TextBlock Text="秒" VerticalAlignment="Center"/>
+                <ComboBox ItemsSource="{Binding KeepAliveIntervalOptions}"
+                          SelectedValue="{Binding SelectedKeepAliveInterval}"
+                          DisplayMemberPath="Label" SelectedValuePath="Seconds"
+                          Width="80"/>
             </StackPanel>
             <TextBlock Text="{Binding KeepAliveStatus}" Foreground="DarkGreen" FontSize="11" Margin="0,0,0,4"/>
+
+            <Separator Margin="0,4"/>
+
+            <!-- 再送設定 -->
+            <TextBlock Text="再送設定:" FontWeight="Bold" Margin="0,4,0,4"/>
+            <TextBlock Text="※仕様: 同一コマンドを3〜5回、5〜10ms間隔で送信" Foreground="Gray" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                <TextBlock Text="回数:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <ComboBox ItemsSource="{Binding RetransmitCountOptions}" SelectedItem="{Binding SelectedRetransmitCount}"
+                          Width="50" Margin="0,0,8,0"/>
+                <TextBlock Text="間隔:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <ComboBox ItemsSource="{Binding RetransmitIntervalOptions}" SelectedItem="{Binding SelectedRetransmitInterval}"
+                          Width="50" Margin="0,0,4,0"/>
+                <TextBlock Text="ms" VerticalAlignment="Center"/>
+            </StackPanel>
 
             <Separator Margin="0,4"/>
 

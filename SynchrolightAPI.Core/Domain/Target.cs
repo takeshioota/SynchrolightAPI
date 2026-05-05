@@ -7,8 +7,8 @@ public abstract record Target
 {
     private Target() { }
 
-    /// <summary>全体一括 (A2): field=0x01(ID書込済), field=0x00(ID未書込)</summary>
-    public sealed record All(byte Field = 0x01) : Target;
+    /// <summary>全体一括 (A2): field=0x00(ブロードキャスト), field=0x01(ID書込済)</summary>
+    public sealed record All(byte Field = 0x00) : Target;
 
     /// <summary>フィールドゾーン定義・水平操作 (A3): field, 開始行, 行数</summary>
     public sealed record Rows(byte Field, ushort StartRow, byte Len) : Target;

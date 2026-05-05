@@ -50,5 +50,7 @@ public class LoggingTransportDecorator : ITransport
         await _inner.EnqueueAsync(packet, options, ct);
     }
 
+    public void FlushQueue() => _inner.FlushQueue();
+
     public TransportStatus GetStatus() => _inner.GetStatus();
 }

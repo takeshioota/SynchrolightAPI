@@ -78,7 +78,8 @@ switch (mode)
                 sp.GetRequiredService<MultiPortTransport>(),
                 sp.GetRequiredService<ILogger<TxWorkerService>>(),
                 sp.GetRequiredService<IConfiguration>(),
-                sp.GetRequiredService<LatencyTracker>()));
+                sp.GetRequiredService<LatencyTracker>(),
+                sp.GetRequiredService<SettingsService>()));
         builder.Services.AddHostedService<PortHealthMonitor>();
         builder.Services.AddHostedService<TestScenarioService>();
         break;

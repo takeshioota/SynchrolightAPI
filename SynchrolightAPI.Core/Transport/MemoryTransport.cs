@@ -176,6 +176,12 @@ public class MemoryTransport : ITransport, IDisposable
             priority, port.Name, envelope.OperationId ?? "-", latencyMs, hex);
     }
 
+    public void FlushQueue()
+    {
+        while (_normalChannel.Reader.TryRead(out _)) { }
+        _logger.LogInformation("[MOCK] 通常キューをフラッシュしました");
+    }
+
     public TransportStatus GetStatus()
     {
         lock (_lock)

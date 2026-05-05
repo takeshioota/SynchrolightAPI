@@ -8,6 +8,7 @@ public class MainViewModel
     public SendLogViewModel SendLog { get; }
     public BleIdPanelViewModel BleIdPanel { get; }
     public ZoneSettingsViewModel ZoneSettings { get; }
+    public SequencePanelViewModel SequencePanel { get; }
 
     public MainViewModel(
         ConnectionViewModel connection,
@@ -15,7 +16,8 @@ public class MainViewModel
         CommandPanelViewModel commandPanel,
         SendLogViewModel sendLog,
         BleIdPanelViewModel bleIdPanel,
-        ZoneSettingsViewModel zoneSettings)
+        ZoneSettingsViewModel zoneSettings,
+        SequencePanelViewModel sequencePanel)
     {
         Connection = connection;
         TransmitterSettings = transmitterSettings;
@@ -23,5 +25,6 @@ public class MainViewModel
         SendLog = sendLog;
         BleIdPanel = bleIdPanel;
         ZoneSettings = zoneSettings;
+        SequencePanel = sequencePanel;
     }
 }
