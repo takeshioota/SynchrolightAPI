@@ -40,8 +40,24 @@ public partial class TransmitterSettingsViewModel : ObservableObject
         new(300,  "300秒"),
         new(480,  "480秒"),
     ];
-    public int[] RetransmitCountOptions { get; } = [1, 2, 3, 4, 5];
-    public int[] RetransmitIntervalOptions { get; } = [5, 7, 10];
+    public IntOption[] RetransmitCountOptions { get; } =
+    [
+        new(1, "1回"),
+        new(2, "2回"),
+        new(3, "3回"),
+        new(4, "4回"),
+        new(5, "5回"),
+    ];
+    public IntOption[] RetransmitIntervalOptions { get; } =
+    [
+        new(5,  "5ms"),
+        new(7,  "7ms"),
+        new(10, "10ms"),
+        new(20, "20ms"),
+        new(40, "40ms"),
+        new(60, "60ms"),
+        new(80, "80ms"),
+    ];
 
     [ObservableProperty]
     private int _selectedChannel = 4;

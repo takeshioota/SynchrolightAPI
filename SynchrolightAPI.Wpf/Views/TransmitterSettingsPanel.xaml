@@ -37,15 +37,18 @@
 
             <!-- 再送設定 -->
             <TextBlock Text="再送設定:" FontWeight="Bold" Margin="0,4,0,4"/>
-            <TextBlock Text="※仕様: 同一コマンドを3〜5回、5〜10ms間隔で送信" Foreground="Gray" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
+            <TextBlock Text="※仕様: 同一コマンドを複数回、20ms以上の間隔で再送" Foreground="Gray" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
             <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                 <TextBlock Text="回数:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <ComboBox ItemsSource="{Binding RetransmitCountOptions}" SelectedItem="{Binding SelectedRetransmitCount}"
-                          Width="50" Margin="0,0,8,0"/>
+                <ComboBox ItemsSource="{Binding RetransmitCountOptions}"
+                          SelectedValue="{Binding SelectedRetransmitCount}"
+                          DisplayMemberPath="Label" SelectedValuePath="Value"
+                          Width="60" Margin="0,0,8,0"/>
                 <TextBlock Text="間隔:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <ComboBox ItemsSource="{Binding RetransmitIntervalOptions}" SelectedItem="{Binding SelectedRetransmitInterval}"
-                          Width="50" Margin="0,0,4,0"/>
-                <TextBlock Text="ms" VerticalAlignment="Center"/>
+                <ComboBox ItemsSource="{Binding RetransmitIntervalOptions}"
+                          SelectedValue="{Binding SelectedRetransmitInterval}"
+                          DisplayMemberPath="Label" SelectedValuePath="Value"
+                          Width="70"/>
             </StackPanel>
 
             <Separator Margin="0,4"/>
