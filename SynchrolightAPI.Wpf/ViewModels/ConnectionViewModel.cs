@@ -1,16 +1,16 @@
 using System.Collections.ObjectModel;
-using System.IO.Ports;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SynchrolightAPI.Settings;
-using SynchrolightAPI.Transport;
 using SynchrolightAPI.Wpf.Models;
+using SynchrolightAPI.Wpf.Services;
 
 namespace SynchrolightAPI.Wpf.ViewModels;
 
 public partial class ConnectionViewModel : ObservableObject
 {
-    private readonly ITransport _transport;
+    private readonly SynchrolightApiClient _apiClient;
     private readonly SettingsService _settings;
 
     public ObservableCollection<ComPortItem> Ports { get; } = [];
@@ -21,27 +21,32 @@ public partial class ConnectionViewModel : ObservableObject
     [ObservableProperty]
     private string _statusText = "未接続";
 
-    public ConnectionViewModel(ITransport transport, SettingsService settings)
+    public ConnectionViewModel(SynchrolightApiClient apiClient, SettingsService settings)
     {
-        _transport = transport;
+        _apiClient = apiClient;
         _settings = settings;
-        ScanPorts();
+        _ = ScanPortsAsync();
     }
 
     [RelayCommand]
-    private void ScanPorts()
+    private async Task ScanPortsAsync()
     {
-        var savedPorts = _settings.Current.SelectedPorts;
-        Ports.Clear();
-        foreach (var name in SerialPort.GetPortNames().OrderBy(n => n))
+        try
         {
-            var isSelected = savedPorts.Contains(name, StringComparer.OrdinalIgnoreCase);
-            Ports.Add(new ComPortItem(name, isSelected));
+            var savedPorts = _settings.Current.SelectedPorts;
+            var portNames = await _apiClient.ScanPortsAsync();
+            Ports.Clear();
+            foreach (var name in portNames)
+            {
+                var isSelected = savedPorts.Contains(name, StringComparer.OrdinalIgnoreCase);
+                Ports.Add(new ComPortItem(name, isSelected));
+            }
+            StatusText = Ports.Count == 0 ? "COMポートなし" : "未接続";
         }
-        if (Ports.Count == 0)
-            StatusText = "COMポートなし";
-        else
-            StatusText = "未接続";
+        catch (HttpRequestException)
+        {
+            StatusText = "API接続エラー";
+        }
     }
 
     [RelayCommand]
@@ -53,18 +58,29 @@ public partial class ConnectionViewModel : ObservableObject
         // 選択ポートを保存
         _settings.Update(s => s.SelectedPorts = selected);
 
-        await _transport.ConnectAsync(selected);
-        var status = _transport.GetStatus();
-        IsConnected = status.ConnectedPorts > 0;
-        StatusText = IsConnected
-            ? $"接続済 ({status.ConnectedPorts})"
-            : "接続失敗";
+        try
+        {
+            await _apiClient.ConnectAsync(selected);
+            var status = await _apiClient.GetTransportStatusAsync();
+            IsConnected = status.ConnectedPorts > 0;
+            StatusText = IsConnected
+                ? $"接続済 ({status.ConnectedPorts})"
+                : "接続失敗";
+        }
+        catch (HttpRequestException)
+        {
+            StatusText = "API接続エラー";
+        }
     }
 
     [RelayCommand]
     private async Task DisconnectAsync()
     {
-        await _transport.DisconnectAsync();
+        try
+        {
+            await _apiClient.DisconnectAsync();
+        }
+        catch (HttpRequestException) { }
         IsConnected = false;
         StatusText = "未接続";
     }

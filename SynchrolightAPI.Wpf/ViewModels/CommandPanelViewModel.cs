@@ -4,18 +4,16 @@ using SynchrolightAPI.Domain;
 using SynchrolightAPI.Protocol;
 using SynchrolightAPI.Services;
 using SynchrolightAPI.Settings;
-using SynchrolightAPI.Transport;
 using SynchrolightAPI.Wpf.Models;
+using SynchrolightAPI.Wpf.Services;
 
 namespace SynchrolightAPI.Wpf.ViewModels;
 
 public partial class CommandPanelViewModel : ObservableObject
 {
-    private readonly ITransport _transport;
     private readonly SettingsService? _settings;
-    private readonly EffectEngine? _effectEngine;
-    private readonly EffectScheduler? _scheduler;
-    private CancellationTokenSource? _effectCts;
+    private readonly SynchrolightApiClient? _apiClient;
+    private bool _isEffectRunning;
     private CancellationTokenSource? _colorDebounceCts;
 
     // --- モード切替 ---
@@ -103,7 +101,7 @@ public partial class CommandPanelViewModel : ObservableObject
 
     private void RestartEffectDebounced()
     {
-        if (_effectCts is not { IsCancellationRequested: false }) return;
+        if (!_isEffectRunning) return;
 
         // プリセットカラー等でR/G/Bが連続変更されるとき、最後の1回だけ再起動
         _colorDebounceCts?.Cancel();
@@ -132,7 +130,7 @@ public partial class CommandPanelViewModel : ObservableObject
     partial void OnSelectedEffectChanged(EffectType value)
     {
         // エフェクト実行中なら新しいエフェクトで即座に再起動
-        if (_effectCts is { IsCancellationRequested: false })
+        if (_isEffectRunning)
         {
             _ = StartEffectAsync();
         }
@@ -152,7 +150,7 @@ public partial class CommandPanelViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(CycleDurationDisplay));
         // エフェクト実行中なら新しい速度で即座に再起動
-        if (_effectCts is { IsCancellationRequested: false })
+        if (_isEffectRunning)
         {
             _ = StartEffectAsync();
         }
@@ -198,17 +196,13 @@ public partial class CommandPanelViewModel : ObservableObject
     private readonly TransmitterSettingsViewModel? _transmitterSettings;
 
     public CommandPanelViewModel(
-        ITransport transport,
+        SynchrolightApiClient? apiClient = null,
         TransmitterSettingsViewModel? transmitterSettings = null,
-        SettingsService? settings = null,
-        EffectEngine? effectEngine = null,
-        EffectScheduler? scheduler = null)
+        SettingsService? settings = null)
     {
-        _transport = transport;
+        _apiClient = apiClient;
         _transmitterSettings = transmitterSettings;
         _settings = settings;
-        _effectEngine = effectEngine;
-        _scheduler = scheduler;
 
         // トグルボタン初期化
         CommandItems = BuildCommandItems();
@@ -246,37 +240,52 @@ public partial class CommandPanelViewModel : ObservableObject
     [RelayCommand]
     private async Task SendAsync()
     {
-        byte[] packet = SelectedCommand switch
+        if (_apiClient == null) return;
+
+        // キープアライブ用に最後のパケットを記録
+        byte[]? packetForKeepAlive = SelectedCommand switch
         {
-            CommandType.A0_Points => LightProtocol.BuildA0_Points(
-                Field, StartRow, StartCol, Len, CreateColorArray(Len)),
-            CommandType.A1_PlaySequence => LightProtocol.BuildA1_PlaySequence(FrameNo),
             CommandType.A2_GlobalColor => LightProtocol.BuildA2_GlobalColor(Field, ColorR, ColorG, ColorB),
-            CommandType.A3_Rows => LightProtocol.BuildA3_Rows(
-                Field, StartRow, Len, ColorR, ColorG, ColorB),
-            CommandType.A4_Cols => LightProtocol.BuildA4_Cols(
-                Field, StartCol, Len, ColorR, ColorG, ColorB),
-            CommandType.A6_SetRxChannel => LightProtocol.BuildA6_SetRxChannel(
-                Field, StartRow, Len, RxChannel),
-            CommandType.A8_MultiCols => LightProtocol.BuildA8_MultiColsSameColor(
-                Field, StartCol, ColLen, ColorR, ColorG, ColorB),
-            CommandType.AA_MultiRows => LightProtocol.BuildAA_MultiRowsSameColor(
-                Field, StartRow, RowLen, ColorR, ColorG, ColorB),
-            CommandType.AC_Block => LightProtocol.BuildAC_BlockColor(
-                ProgNo, BlockNo, ColorR, ColorG, ColorB),
-            CommandType.AE_BlockSector => LightProtocol.BuildAE_BlockColorSector(
-                ProgNo, BlockNo, ColorR, ColorG, ColorB),
-            _ => throw new InvalidOperationException()
+            CommandType.A3_Rows => LightProtocol.BuildA3_Rows(Field, StartRow, Len, ColorR, ColorG, ColorB),
+            _ => null
         };
 
-        // ゾーン指定付き送信
-        var zoneId = ResolveZoneId();
-        var options = zoneId != null
-            ? SendOptions.Default with { TargetZoneId = zoneId }
-            : SendOptions.Default;
+        switch (SelectedCommand)
+        {
+            case CommandType.A0_Points:
+                await _apiClient.SetPointsAsync(Field, StartRow, StartCol, Len, ColorR, ColorG, ColorB);
+                break;
+            case CommandType.A1_PlaySequence:
+                await _apiClient.PlayHwSequenceAsync(FrameNo);
+                break;
+            case CommandType.A2_GlobalColor:
+                await _apiClient.SetGlobalColorAsync(Field, ColorR, ColorG, ColorB);
+                break;
+            case CommandType.A3_Rows:
+                await _apiClient.SetRowsEachAsync(Field, StartRow, Len, ColorR, ColorG, ColorB);
+                break;
+            case CommandType.A4_Cols:
+                await _apiClient.SetColsEachAsync(Field, StartCol, Len, ColorR, ColorG, ColorB);
+                break;
+            case CommandType.A6_SetRxChannel:
+                await _apiClient.SetRxChannelAsync(Field, StartRow, Len, RxChannel);
+                break;
+            case CommandType.A8_MultiCols:
+                await _apiClient.SetMultiColsAsync(Field, StartCol, ColLen, ColorR, ColorG, ColorB);
+                break;
+            case CommandType.AA_MultiRows:
+                await _apiClient.SetMultiRowsAsync(Field, StartRow, RowLen, ColorR, ColorG, ColorB);
+                break;
+            case CommandType.AC_Block:
+                await _apiClient.SetBlockColorAsync(ProgNo, BlockNo, ColorR, ColorG, ColorB);
+                break;
+            case CommandType.AE_BlockSector:
+                await _apiClient.SetBlockSectorAsync(ProgNo, BlockNo, ColorR, ColorG, ColorB);
+                break;
+        }
 
-        await _transport.EnqueueAsync(packet, options);
-        _transmitterSettings?.UpdateLastSentPacket(packet);
+        if (packetForKeepAlive != null)
+            _transmitterSettings?.UpdateLastSentPacket(packetForKeepAlive);
 
         // 色を保存
         SaveLastColor();
@@ -305,25 +314,10 @@ public partial class CommandPanelViewModel : ObservableObject
         _settings?.Update(s => s.LastColor = new RgbSetting(ColorR, ColorG, ColorB));
     }
 
-    private string? ResolveZoneId()
-    {
-        if (string.IsNullOrEmpty(TargetZoneId) || TargetZoneId == "(全体同報)")
-            return null;
-
-        // "Zone1 (COM4)" → "Zone1"
-        var spaceIdx = TargetZoneId.IndexOf(' ');
-        return spaceIdx > 0 ? TargetZoneId[..spaceIdx] : TargetZoneId;
-    }
-
     [RelayCommand]
     private async Task StartEffectAsync()
     {
-        if (_effectEngine == null) return;
-
-        // 既存エフェクトを停止（切替なので消灯コマンドは不要）
-        _effectCts?.Cancel();
-        _effectCts?.Dispose();
-        _effectCts = null;
+        if (_apiClient == null) return;
 
         // 色が黒(0,0,0)の場合は赤にフォールバック（黒↔黒は視認不可）
         if (ColorR == 0 && ColorG == 0 && ColorB == 0)
@@ -333,52 +327,31 @@ public partial class CommandPanelViewModel : ObservableObject
             ColorB = 0x00;
         }
 
-        _effectCts = new CancellationTokenSource();
-        var p = new EffectParams(
-            Type: SelectedEffect,
-            Color: new Rgb(ColorR, ColorG, ColorB),
-            Field: Field,
-            CycleDuration: TimeSpan.FromMilliseconds(SelectedCycleDuration),
-            FlashInterval: TimeSpan.FromMilliseconds(SelectedCycleDuration / 2),
-            Continuous: true
-        );
+        var ok = await _apiClient.StartEffectAsync(
+            SelectedEffect, ColorR, ColorG, ColorB,
+            field: Field,
+            cycleDurationMs: SelectedCycleDuration,
+            flashIntervalMs: SelectedCycleDuration / 2,
+            continuous: true);
 
-        EffectStatus = $"{SelectedEffect} 実行中...";
-
-        try
+        if (ok)
         {
-            await _effectEngine.RunAsync(p, _effectCts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // 正常停止
-        }
-        finally
-        {
-            EffectStatus = "";
+            _isEffectRunning = true;
+            EffectStatus = $"{SelectedEffect} 実行中...";
         }
     }
 
     [RelayCommand]
     private async Task StopEffectAsync()
     {
-        _effectCts?.Cancel();
-        _effectCts?.Dispose();
-        _effectCts = null;
-        _scheduler?.Abort();
+        if (_apiClient != null)
+        {
+            await _apiClient.StopEffectAsync();
+            await _apiClient.AllOffAsync();
+        }
 
-        // 消灯コマンド送信
-        var blackPacket = LightProtocol.BuildA2_GlobalColor(Field, 0, 0, 0);
-        await _transport.EnqueueAsync(blackPacket, SendOptions.Default);
-
+        _isEffectRunning = false;
         EffectStatus = "";
-    }
-
-    private (byte r, byte g, byte b)[] CreateColorArray(int len)
-    {
-        var arr = new (byte r, byte g, byte b)[len];
-        Array.Fill(arr, (ColorR, ColorG, ColorB));
-        return arr;
     }
 
     private CommandItem[] BuildCommandItems()

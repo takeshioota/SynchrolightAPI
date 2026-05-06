@@ -167,6 +167,29 @@ public class LightController(LightingService lighting, ICommandBuilder cmd, ITra
             Message: $"A1 Sequence play frame={req.FrameNo}"));
     }
 
+    // POST /api/light/rx-channel — A6
+    [HttpPost("rx-channel")]
+    public async Task<IActionResult> RxChannel([FromBody] RxChannelRequest req, CancellationToken ct)
+    {
+        var packet = LightProtocol.BuildA6_SetRxChannel(
+            (byte)req.Field, (ushort)req.StartRow, (byte)req.Len, (byte)req.Channel);
+        await transport.EnqueueAsync(packet, ct);
+        return Ok(new ApiResponse(true,
+            Message: $"A6 SetRxChannel ch={req.Channel} rows {req.StartRow}-{req.StartRow + req.Len - 1}"));
+    }
+
+    // POST /api/light/block-sector — AE
+    [HttpPost("block-sector")]
+    public async Task<IActionResult> BlockSector([FromBody] BlockSectorRequest req, CancellationToken ct)
+    {
+        var rgb = req.Color.ToRgb();
+        var packet = LightProtocol.BuildAE_BlockColorSector(
+            (byte)req.ProgNo, (byte)req.BlockNo, rgb.R, rgb.G, rgb.B);
+        await transport.EnqueueAsync(packet, ct);
+        return Ok(new ApiResponse(true,
+            Message: $"AE BlockSector prog={req.ProgNo} block={req.BlockNo} set to ({rgb.R},{rgb.G},{rgb.B})"));
+    }
+
     // POST /api/light/off — A2 (黒)
     [HttpPost("off")]
     public async Task<IActionResult> Off(CancellationToken ct)
