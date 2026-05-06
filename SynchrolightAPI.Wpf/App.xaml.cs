@@ -1,13 +1,9 @@
+using System.Net.Http;
 using System.Windows;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using SynchrolightAPI.Diagnostics;
-using SynchrolightAPI.Protocol;
-using SynchrolightAPI.Services;
 using SynchrolightAPI.Settings;
-using SynchrolightAPI.Transport;
 using SynchrolightAPI.Wpf.Services;
 using SynchrolightAPI.Wpf.ViewModels;
 
@@ -28,58 +24,10 @@ public partial class App : Application
                 // 設定永続化
                 services.AddSingleton<SettingsService>();
 
-                // Protocol層
-                services.AddSingleton<ICommandBuilder, CommandBuilder>();
-
-                // Diagnostics
-                services.AddSingleton<LatencyTracker>();
-
-                // Zone Router
-                services.AddSingleton<ZoneRouter>();
-
-                // Transport層
-                services.AddSingleton<MultiPortTransport>(sp =>
-                {
-                    var logger = sp.GetRequiredService<ILogger<MultiPortTransport>>();
-                    var capacity = ctx.Configuration.GetValue<int>("SerialPort:QueueCapacity", 256);
-                    var zoneRouter = sp.GetRequiredService<ZoneRouter>();
-                    return new MultiPortTransport(logger, capacity, zoneRouter);
-                });
-                services.AddSingleton<ITransport>(sp =>
-                {
-                    var mpt = sp.GetRequiredService<MultiPortTransport>();
-                    var logVm = sp.GetRequiredService<SendLogViewModel>();
-                    return new LoggingTransportDecorator(mpt, logVm);
-                });
-
-                // Command Throttler
-                services.AddSingleton<CommandThrottler>(sp =>
-                    new CommandThrottler(
-                        sp.GetRequiredService<ITransport>(),
-                        sp.GetRequiredService<ILogger<CommandThrottler>>()));
-
-                // Service層
-                services.AddSingleton<LightingService>(sp =>
-                    new LightingService(
-                        sp.GetRequiredService<ICommandBuilder>(),
-                        sp.GetRequiredService<ITransport>(),
-                        sp.GetRequiredService<ILogger<LightingService>>(),
-                        sp.GetRequiredService<CommandThrottler>()));
-                services.AddSingleton<InterpolationService>();
-                services.AddSingleton<EffectScheduler>();
-                services.AddSingleton<EffectEngine>();
-                services.AddSingleton<SequenceStore>();
-                services.AddSingleton<SequencePlayer>();
-
-                // BackgroundServices
-                services.AddHostedService<TxWorkerService>(sp =>
-                    new TxWorkerService(
-                        sp.GetRequiredService<MultiPortTransport>(),
-                        sp.GetRequiredService<ILogger<TxWorkerService>>(),
-                        sp.GetRequiredService<IConfiguration>(),
-                        sp.GetRequiredService<LatencyTracker>(),
-                        sp.GetRequiredService<SettingsService>()));
-                services.AddHostedService<PortHealthMonitor>();
+                // API Client（全操作を API 経由で実行）
+                var apiBaseUrl = ctx.Configuration.GetValue<string>("Api:BaseUrl") ?? "http://localhost:5100";
+                services.AddSingleton<HttpClient>(_ => new HttpClient { BaseAddress = new Uri(apiBaseUrl) });
+                services.AddSingleton<SynchrolightApiClient>();
 
                 // BLE
                 services.AddSingleton<BleIdService>();
@@ -88,28 +36,23 @@ public partial class App : Application
                 services.AddSingleton<SendLogViewModel>();
                 services.AddSingleton<ConnectionViewModel>(sp =>
                     new ConnectionViewModel(
-                        sp.GetRequiredService<ITransport>(),
+                        sp.GetRequiredService<SynchrolightApiClient>(),
                         sp.GetRequiredService<SettingsService>()));
                 services.AddSingleton<TransmitterSettingsViewModel>(sp =>
                     new TransmitterSettingsViewModel(
-                        sp.GetRequiredService<LightingService>(),
-                        sp.GetRequiredService<ITransport>(),
-                        sp.GetRequiredService<SettingsService>(),
-                        sp.GetRequiredService<LatencyTracker>()));
+                        sp.GetRequiredService<SynchrolightApiClient>(),
+                        sp.GetRequiredService<SettingsService>()));
                 services.AddSingleton<CommandPanelViewModel>(sp =>
                     new CommandPanelViewModel(
-                        sp.GetRequiredService<ITransport>(),
+                        sp.GetRequiredService<SynchrolightApiClient>(),
                         sp.GetRequiredService<TransmitterSettingsViewModel>(),
-                        sp.GetRequiredService<SettingsService>(),
-                        sp.GetRequiredService<EffectEngine>(),
-                        sp.GetRequiredService<EffectScheduler>()));
+                        sp.GetRequiredService<SettingsService>()));
                 services.AddSingleton<BleIdPanelViewModel>();
-                services.AddSingleton<SequencePanelViewModel>();
                 services.AddSingleton<ZoneSettingsViewModel>(sp =>
                     new ZoneSettingsViewModel(
                         sp.GetRequiredService<SettingsService>(),
-                        sp.GetRequiredService<ZoneRouter>(),
                         sp.GetRequiredService<CommandPanelViewModel>()));
+                services.AddSingleton<SequencePanelViewModel>();
                 services.AddSingleton<MainViewModel>();
             })
             .Build();

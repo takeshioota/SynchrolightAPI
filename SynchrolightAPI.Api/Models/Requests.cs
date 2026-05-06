@@ -22,3 +22,30 @@ public record PointsRequest(int Field, int StartRow, int StartCol, int? Len, Col
 public record BlockRequest(int ProgNo, int BlockNo, ColorValue Color);
 
 public record SequenceRequest(uint FrameNo);
+
+// --- Effect ---
+public record StartEffectRequest(
+    SynchrolightAPI.Services.EffectType Type,
+    ColorValue Color,
+    int? Field,
+    int? CycleDurationMs,
+    int? FlashIntervalMs,
+    int? FadeSteps,
+    bool? Continuous
+);
+
+// --- Sequence ---
+public record PlaySequenceRequest(string Name);
+
+public record SaveSequenceRequest(string Name, List<SynchrolightAPI.Models.SequenceStep> Steps);
+
+// --- Transmitter (追加) ---
+public record SetChannelRequest(int Channel);
+public record SetPowerRequest(int Power);
+
+// --- Light (追加) ---
+public record RxChannelRequest(int Field, int StartRow, int Len, int Channel);
+public record BlockSectorRequest(int ProgNo, int BlockNo, ColorValue Color);
+
+// --- Transport (追加) ---
+public record KeepAliveRequest(string? Base64Packet);

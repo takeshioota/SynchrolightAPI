@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SynchrolightAPI.Domain;
 using SynchrolightAPI.Models;
 using SynchrolightAPI.Services;
+using SynchrolightAPI.Wpf.Services;
 
 namespace SynchrolightAPI.Wpf.ViewModels;
 
@@ -13,9 +15,8 @@ namespace SynchrolightAPI.Wpf.ViewModels;
 /// </summary>
 public partial class SequencePanelViewModel : ObservableObject
 {
-    private readonly SequenceStore _store;
-    private readonly SequencePlayer _player;
-    private CancellationTokenSource? _playCts;
+    private readonly SynchrolightApiClient _apiClient;
+    private CancellationTokenSource? _pollCts;
 
     [ObservableProperty]
     private string _status = "";
@@ -44,11 +45,10 @@ public partial class SequencePanelViewModel : ObservableObject
     [ObservableProperty]
     private string _editorInfo = "0 ステップ";
 
-    public SequencePanelViewModel(SequenceStore store, SequencePlayer player)
+    public SequencePanelViewModel(SynchrolightApiClient apiClient)
     {
-        _store = store;
-        _player = player;
-        RefreshList();
+        _apiClient = apiClient;
+        _ = RefreshListAsync();
         EditSteps.CollectionChanged += (_, _) => UpdateEditorInfo();
     }
 
@@ -69,12 +69,20 @@ public partial class SequencePanelViewModel : ObservableObject
     // =========================================================
 
     [RelayCommand]
-    private void RefreshList()
+    private async Task RefreshListAsync()
     {
-        SequenceNames.Clear();
-        foreach (var name in _store.ListNames())
+        try
         {
-            SequenceNames.Add(name);
+            var names = await _apiClient.ListSequencesAsync();
+            SequenceNames.Clear();
+            foreach (var name in names)
+            {
+                SequenceNames.Add(name);
+            }
+        }
+        catch (HttpRequestException)
+        {
+            Status = "API接続エラー";
         }
     }
 
@@ -83,50 +91,68 @@ public partial class SequencePanelViewModel : ObservableObject
     {
         if (string.IsNullOrEmpty(SelectedSequenceName)) return;
 
-        var seq = _store.Load(SelectedSequenceName);
-        if (seq == null)
+        await StopAsync();
+
+        var ok = await _apiClient.PlaySequenceAsync(SelectedSequenceName);
+        if (!ok)
         {
-            Status = "シーケンスの読み込みに失敗しました";
+            Status = "シーケンスの再生に失敗しました";
             return;
         }
 
-        Stop();
-        _playCts = new CancellationTokenSource();
         IsPlaying = true;
-        Status = $"再生中: {seq.Name}";
+        Status = $"再生中: {SelectedSequenceName}";
 
-        try
+        // API 側の再生完了をポーリングで検出
+        _pollCts = new CancellationTokenSource();
+        var token = _pollCts.Token;
+
+        _ = Task.Run(async () =>
         {
-            await _player.PlayAsync(seq, _playCts.Token);
-            Status = "再生完了";
-        }
-        catch (OperationCanceledException)
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(500, token);
+                    var status = await _apiClient.GetSequenceStatusAsync();
+                    if (!status.IsPlaying)
+                    {
+                        App.Current?.Dispatcher.Invoke(() =>
+                        {
+                            IsPlaying = false;
+                            Status = "再生完了";
+                        });
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (HttpRequestException) { }
+        }, token);
+    }
+
+    [RelayCommand]
+    private async Task StopAsync()
+    {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        _pollCts = null;
+
+        if (IsPlaying)
         {
+            await _apiClient.StopSequenceAsync();
             Status = "停止しました";
         }
-        finally
-        {
-            IsPlaying = false;
-        }
-    }
 
-    [RelayCommand]
-    private void Stop()
-    {
-        _playCts?.Cancel();
-        _playCts?.Dispose();
-        _playCts = null;
-        _player.FlushAndStop();
         IsPlaying = false;
-        Status = "";
     }
 
     [RelayCommand]
-    private void DeleteSelected()
+    private async Task DeleteSelectedAsync()
     {
         if (string.IsNullOrEmpty(SelectedSequenceName)) return;
-        _store.Delete(SelectedSequenceName);
-        RefreshList();
+        await _apiClient.DeleteSequenceAsync(SelectedSequenceName);
+        await RefreshListAsync();
         Status = "削除しました";
     }
 
@@ -295,7 +321,7 @@ public partial class SequencePanelViewModel : ObservableObject
     // =========================================================
 
     [RelayCommand]
-    private void SaveSequence()
+    private async Task SaveSequenceAsync()
     {
         if (string.IsNullOrWhiteSpace(NewSequenceName))
         {
@@ -321,17 +347,17 @@ public partial class SequencePanelViewModel : ObservableObject
             }).ToList()
         };
 
-        _store.Save(seq);
-        RefreshList();
+        await _apiClient.SaveSequenceAsync(seq);
+        await RefreshListAsync();
         Status = $"保存しました: {seq.Name}";
     }
 
     [RelayCommand]
-    private void LoadToEditor()
+    private async Task LoadToEditorAsync()
     {
         if (string.IsNullOrEmpty(SelectedSequenceName)) return;
 
-        var seq = _store.Load(SelectedSequenceName);
+        var seq = await _apiClient.GetSequenceAsync(SelectedSequenceName);
         if (seq == null) return;
 
         NewSequenceName = seq.Name;

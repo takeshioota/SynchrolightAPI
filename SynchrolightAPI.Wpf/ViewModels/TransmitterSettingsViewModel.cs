@@ -1,21 +1,17 @@
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using SynchrolightAPI.Diagnostics;
 using SynchrolightAPI.Protocol;
-using SynchrolightAPI.Services;
 using SynchrolightAPI.Settings;
-using SynchrolightAPI.Transport;
 using SynchrolightAPI.Wpf.Models;
+using SynchrolightAPI.Wpf.Services;
 
 namespace SynchrolightAPI.Wpf.ViewModels;
 
 public partial class TransmitterSettingsViewModel : ObservableObject
 {
-    private readonly LightingService _lighting;
-    private readonly ITransport _transport;
+    private readonly SynchrolightApiClient _apiClient;
     private readonly SettingsService _settings;
-    private readonly LatencyTracker? _latencyTracker;
     private readonly DispatcherTimer _statusTimer;
     private CancellationTokenSource? _keepAliveCts;
     private byte[] _lastSentPacket = LightProtocol.BuildA2_GlobalColor(0x00, 0, 0, 0);
@@ -101,21 +97,17 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     private string _latencyText = "-";
 
     public TransmitterSettingsViewModel(
-        LightingService lighting,
-        ITransport transport,
-        SettingsService settings,
-        LatencyTracker? latencyTracker = null)
+        SynchrolightApiClient apiClient,
+        SettingsService settings)
     {
-        _lighting = lighting;
-        _transport = transport;
+        _apiClient = apiClient;
         _settings = settings;
-        _latencyTracker = latencyTracker;
 
         // 保存済み設定を復元
         RestoreSettings();
 
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        _statusTimer.Tick += (_, _) => RefreshStatus();
+        _statusTimer.Tick += async (_, _) => await RefreshStatusAsync();
         _statusTimer.Start();
     }
 
@@ -159,24 +151,19 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task SetChannelAsync()
     {
-        await _transport.EnqueueAsync(
-            LightProtocol.BuildTxSetChannel((byte)SelectedChannel),
-            SendOptions.Default with { HighPriority = true });
+        await _apiClient.SetChannelAsync(SelectedChannel);
     }
 
     [RelayCommand]
     private async Task SetPowerAsync()
     {
-        await _transport.EnqueueAsync(
-            LightProtocol.BuildTxSetPower((byte)SelectedPower),
-            SendOptions.Default with { HighPriority = true });
+        await _apiClient.SetPowerAsync(SelectedPower);
     }
 
     [RelayCommand]
     private async Task InitializeTransmitterAsync()
     {
-        await _lighting.InitializeTransmitterAsync(
-            (byte)SelectedChannel, (byte)SelectedPower);
+        await _apiClient.InitTransmitterAsync(SelectedChannel, SelectedPower);
     }
 
     [RelayCommand]
@@ -239,11 +226,8 @@ public partial class TransmitterSettingsViewModel : ObservableObject
     {
         try
         {
-            var status = _transport.GetStatus();
-            if (status.ConnectedPorts > 0)
-            {
-                await _transport.EnqueueAsync(_lastSentPacket);
-            }
+            var base64 = Convert.ToBase64String(_lastSentPacket);
+            await _apiClient.SendKeepAliveAsync(base64);
         }
         catch
         {
@@ -260,22 +244,20 @@ public partial class TransmitterSettingsViewModel : ObservableObject
         }
     }
 
-    private void RefreshStatus()
+    private async Task RefreshStatusAsync()
     {
-        var s = _transport.GetStatus();
-        QueueLength = s.QueueLength;
-        HighPriorityQueueLength = s.HighPriorityQueueLength;
-        ConnectedPorts = s.ConnectedPorts;
-        DisconnectedPorts = s.DisconnectedPorts;
-        LastError = s.LastError;
-
-        // レイテンシ統計更新
-        if (_latencyTracker != null)
+        try
         {
-            var stats = _latencyTracker.GetStatistics(TimeSpan.FromSeconds(30));
-            LatencyText = stats.Count > 0
-                ? $"P50={stats.P50Ms:F1} P95={stats.P95Ms:F1} ({stats.Count}件)"
-                : "-";
+            var s = await _apiClient.GetTransportStatusAsync();
+            QueueLength = s.QueueLength;
+            HighPriorityQueueLength = s.HighPriorityQueueLength;
+            ConnectedPorts = s.ConnectedPorts;
+            DisconnectedPorts = s.DisconnectedPorts;
+            LastError = s.LastError;
+        }
+        catch
+        {
+            // ステータス取得エラーは無視
         }
     }
 }

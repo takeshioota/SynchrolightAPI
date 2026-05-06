@@ -1,3 +1,4 @@
+using System.IO.Ports;
 using Microsoft.AspNetCore.Mvc;
 using SynchrolightAPI.Api.Models;
 using SynchrolightAPI.Transport;
@@ -36,9 +37,31 @@ public class TransportController(ITransport transport) : ControllerBase
         return Ok(new ApiResponse(true, Data: new
         {
             s.QueueLength,
+            s.HighPriorityQueueLength,
             s.ConnectedPorts,
+            s.DisconnectedPorts,
             s.LastError,
             Ports = ports
         }));
+    }
+
+    // GET /api/transport/scan — 利用可能なCOMポート一覧
+    [HttpGet("scan")]
+    public IActionResult Scan()
+    {
+        var ports = SerialPort.GetPortNames().OrderBy(n => n).ToArray();
+        return Ok(new ApiResponse(true, Data: new { ports }));
+    }
+
+    // POST /api/transport/keepalive — 指定パケットを再送
+    [HttpPost("keepalive")]
+    public async Task<IActionResult> KeepAlive([FromBody] KeepAliveRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(req.Base64Packet))
+            return BadRequest(new ApiResponse(false, Error: "base64Packet is required"));
+
+        var packet = Convert.FromBase64String(req.Base64Packet);
+        await transport.EnqueueAsync(packet, ct);
+        return Ok(new ApiResponse(true, Message: "Keep-alive sent"));
     }
 }
