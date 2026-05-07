@@ -1,14 +1,20 @@
 using System.IO.Ports;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using SynchrolightAPI.Api.Models;
+using SynchrolightAPI.Api.Services;
 using SynchrolightAPI.Transport;
 
 namespace SynchrolightAPI.Api.Controllers;
 
 [ApiController]
 [Route("api/transport")]
-public class TransportController(ITransport transport) : ControllerBase
+public class TransportController(ITransport transport, SendLogStore sendLogStore) : ControllerBase
 {
+    private static readonly JsonSerializerOptions SseJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
     [HttpPost("connect")]
     public async Task<IActionResult> Connect([FromBody] ConnectRequest req)
     {
@@ -51,6 +57,41 @@ public class TransportController(ITransport transport) : ControllerBase
     {
         var ports = SerialPort.GetPortNames().OrderBy(n => n).ToArray();
         return Ok(new ApiResponse(true, Data: new { ports }));
+    }
+
+    // GET /api/transport/log — 送信ログ取得（ポーリング用）
+    [HttpGet("log")]
+    public IActionResult GetLog([FromQuery] long afterSeq = 0, [FromQuery] int count = 100)
+    {
+        var entries = afterSeq > 0
+            ? sendLogStore.GetSince(afterSeq)
+            : sendLogStore.GetRecent(count);
+        return Ok(new ApiResponse(true, Data: new { entries }));
+    }
+
+    // GET /api/transport/log/stream — 送信ログSSEストリーム（リアルタイム用）
+    [HttpGet("log/stream")]
+    public async Task GetLogStream(CancellationToken ct)
+    {
+        Response.ContentType = "text/event-stream";
+        Response.Headers.CacheControl = "no-cache";
+        Response.Headers.Connection = "keep-alive";
+
+        var reader = sendLogStore.Subscribe();
+        try
+        {
+            await foreach (var entry in reader.ReadAllAsync(ct))
+            {
+                var json = JsonSerializer.Serialize(entry, SseJsonOptions);
+                await Response.WriteAsync($"data: {json}\n\n", ct);
+                await Response.Body.FlushAsync(ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            sendLogStore.Unsubscribe(reader);
+        }
     }
 
     // POST /api/transport/keepalive — 指定パケットを再送

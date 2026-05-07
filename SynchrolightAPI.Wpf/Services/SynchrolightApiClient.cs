@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -14,6 +15,7 @@ namespace SynchrolightAPI.Wpf.Services;
 public class SynchrolightApiClient
 {
     private readonly HttpClient _http;
+    private readonly HttpClient _sseHttp;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -23,6 +25,8 @@ public class SynchrolightApiClient
     public SynchrolightApiClient(HttpClient httpClient)
     {
         _http = httpClient;
+        // SSE用: タイムアウト無制限（長時間接続を維持するため）
+        _sseHttp = new HttpClient { BaseAddress = httpClient.BaseAddress, Timeout = System.Threading.Timeout.InfiniteTimeSpan };
     }
 
     // =========================================================
@@ -290,6 +294,38 @@ public class SynchrolightApiClient
             data.TryGetProperty("sequenceName", out var sn) && sn.ValueKind != JsonValueKind.Null
                 ? sn.GetString() : null);
     }
+    // =========================================================
+    //  Send Log — SSEストリーム
+    // =========================================================
+
+    /// <summary>
+    /// SSEストリームに接続し、受信したログを callback で通知し続ける。
+    /// CancellationToken でキャンセルするまで継続する。
+    /// </summary>
+    public async Task StreamSendLogAsync(Action<SendLogEntryDto> onEntry, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "api/transport/log/stream");
+        request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+        using var response = await _sseHttp.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+
+        using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream);
+
+        while (!ct.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync(ct);
+            if (line == null) break; // ストリーム終了
+
+            if (line.StartsWith("data: "))
+            {
+                var json = line.Substring("data: ".Length);
+                var entry = JsonSerializer.Deserialize<SendLogEntryDto>(json, JsonOptions);
+                if (entry != null) onEntry(entry);
+            }
+        }
+    }
 }
 
 // --- Result types ---
@@ -299,3 +335,4 @@ public record SequenceStatusResult(bool IsPlaying, string? SequenceName);
 public record TransportStatusResult(
     int QueueLength, int HighPriorityQueueLength,
     int ConnectedPorts, int DisconnectedPorts, string? LastError);
+public record SendLogEntryDto(long Seq, DateTime Timestamp, string Direction, string Hex);

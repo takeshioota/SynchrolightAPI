@@ -13,6 +13,7 @@ public partial class App : Application
 {
     private IHost _host = null!;
     private SettingsService? _settingsService;
+    private CancellationTokenSource? _sseLogCts;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -65,10 +66,45 @@ public partial class App : Application
         var mainWindow = new Views.MainWindow { DataContext = mainVm };
         mainWindow.Show();
         MainWindow = mainWindow;
+
+        // SSE送信ログストリームをバックグラウンドで購読
+        StartSseLogStream();
+    }
+
+    private void StartSseLogStream()
+    {
+        _sseLogCts = new CancellationTokenSource();
+        var apiClient = _host.Services.GetRequiredService<SynchrolightApiClient>();
+        var sendLogVm = _host.Services.GetRequiredService<SendLogViewModel>();
+        var ct = _sseLogCts.Token;
+
+        Task.Run(async () =>
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await apiClient.StreamSendLogAsync(entry =>
+                    {
+                        sendLogVm.AddEntry(entry.Direction, entry.Hex);
+                    }, ct);
+                }
+                catch (OperationCanceledException) { break; }
+                catch
+                {
+                    // API未起動等で接続失敗 → 3秒後にリトライ
+                    try { await Task.Delay(3000, ct); } catch { break; }
+                }
+            }
+        }, ct);
     }
 
     protected override async void OnExit(ExitEventArgs e)
     {
+        // SSEストリーム停止
+        _sseLogCts?.Cancel();
+        _sseLogCts?.Dispose();
+
         // 終了時に設定を保存
         _settingsService?.Save();
 
