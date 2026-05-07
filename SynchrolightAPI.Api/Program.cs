@@ -23,7 +23,12 @@ builder.Services.AddSingleton<MultiPortTransport>(sp =>
     int capacity = builder.Configuration.GetValue("SerialPort:QueueCapacity", 256);
     return new MultiPortTransport(logger, capacity);
 });
-builder.Services.AddSingleton<ITransport>(sp => sp.GetRequiredService<MultiPortTransport>());
+// 送信ログ: リングバッファ + ITransport デコレータ
+builder.Services.AddSingleton<SendLogStore>();
+builder.Services.AddSingleton<ITransport>(sp =>
+    new ApiLoggingTransportDecorator(
+        sp.GetRequiredService<MultiPortTransport>(),
+        sp.GetRequiredService<SendLogStore>()));
 builder.Services.AddSingleton<LightingService>();
 builder.Services.AddHostedService<TxWorkerService>();
 
