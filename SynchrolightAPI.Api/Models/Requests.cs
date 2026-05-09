@@ -38,6 +38,9 @@ public record StartEffectRequest(
 public record PlaySequenceRequest(string Name);
 
 public record SaveSequenceRequest(string Name, List<SynchrolightAPI.Models.SequenceStep> Steps);
+public record PlayInlineRequest(List<SynchrolightAPI.Models.SequenceStep> Steps, bool? Loop);
+public record PlayStepRequest(SynchrolightAPI.Models.SequenceStep Step);
+public record JumpToStepRequest(int StepIndex);
 
 // --- Transmitter (追加) ---
 public record SetChannelRequest(int Channel);

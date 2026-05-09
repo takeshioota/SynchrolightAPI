@@ -9,13 +9,14 @@ namespace SynchrolightAPI.Api.Controllers;
 
 [ApiController]
 [Route("api/light")]
-public class LightController(LightingService lighting, ICommandBuilder cmd, ITransport transport) : ControllerBase
+public class LightController(LightingService lighting, ICommandBuilder cmd, ITransport transport, SequenceRecorder recorder) : ControllerBase
 {
     // POST /api/light/global — A2
     [HttpPost("global")]
     public async Task<IActionResult> Global([FromBody] GlobalColorRequest req, CancellationToken ct)
     {
         var rgb = req.Color.ToRgb();
+        recorder.RecordColor(rgb.R, rgb.G, rgb.B);
         await lighting.SetGlobalColorAsync(rgb, ct);
         return Ok(new ApiResponse(true,
             Message: $"A2 Global color set to ({rgb.R},{rgb.G},{rgb.B})"));
@@ -194,6 +195,7 @@ public class LightController(LightingService lighting, ICommandBuilder cmd, ITra
     [HttpPost("off")]
     public async Task<IActionResult> Off(CancellationToken ct)
     {
+        recorder.RecordOff();
         await lighting.SetGlobalColorAsync(Rgb.Black, ct);
         return Ok(new ApiResponse(true, Message: "All lights off"));
     }

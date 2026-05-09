@@ -27,6 +27,9 @@ public class EffectRunnerService
     private string? _currentSequenceName;
     private Task? _sequenceTask;
 
+    // Inline sequence state (ジャンプ用に保持)
+    private Sequence? _inlineSequence;
+
     public EffectRunnerService(
         EffectEngine effectEngine,
         EffectScheduler scheduler,
@@ -111,6 +114,7 @@ public class EffectRunnerService
         {
             StopEffectInternal();
             StopSequenceInternal();
+            _inlineSequence = null;
 
             var cts = new CancellationTokenSource();
             _sequenceCts = cts;
@@ -145,22 +149,124 @@ public class EffectRunnerService
         return true;
     }
 
+    /// <summary>エディタ内容をインライン再生する（連続再生）。</summary>
+    public void StartSequenceInline(Sequence sequence, int startFromIndex = 0, bool loop = false)
+    {
+        lock (_lock)
+        {
+            StopEffectInternal();
+            StopSequenceInternal();
+
+            _inlineSequence = sequence;
+            _currentSequenceName = null;
+
+            var cts = new CancellationTokenSource();
+            _sequenceCts = cts;
+
+            _sequenceTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await _sequencePlayer.PlayAsync(sequence, cts.Token, startFromIndex, loop);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "インラインシーケンスタスク異常終了");
+                }
+                finally
+                {
+                    lock (_lock)
+                    {
+                        if (_sequenceCts == cts)
+                        {
+                            _sequenceTask = null;
+                        }
+                    }
+                }
+            });
+        }
+
+        _logger.LogInformation("API: インラインシーケンス再生開始 (開始={Start})", startFromIndex);
+    }
+
+    /// <summary>単一ステップを即時実行する（ステップ再生）。</summary>
+    public async Task PlaySingleStepAsync(SequenceStep step)
+    {
+        lock (_lock)
+        {
+            StopEffectInternal();
+            StopSequenceInternal();
+            _inlineSequence = null;
+        }
+
+        // Effect型はStartEffect経由でライフサイクル管理する
+        if (step.CommandType == SequenceCommandType.Effect && step.EffectType.HasValue)
+        {
+            var effectParams = new EffectParams(
+                Type: step.EffectType.Value,
+                Color: new Rgb(step.R, step.G, step.B),
+                Field: step.Field,
+                CycleDuration: step.EffectCycleDurationMs.HasValue
+                    ? TimeSpan.FromMilliseconds(step.EffectCycleDurationMs.Value)
+                    : null,
+                FadeSteps: step.FadeSteps ?? 20,
+                Continuous: true
+            );
+            StartEffect(effectParams);
+        }
+        else if (step.CommandType == SequenceCommandType.EffectStop)
+        {
+            // 既にStopEffectInternalで停止済み
+            _logger.LogDebug("ステップ再生: EffectStop");
+        }
+        else
+        {
+            // Color, Off: SequencePlayer経由で直接実行
+            await _sequencePlayer.ExecuteStepAsync(step, CancellationToken.None);
+        }
+    }
+
+    /// <summary>再生中にジャンプする。</summary>
+    /// <returns>ジャンプ成功の場合 true</returns>
+    public bool JumpToStep(int stepIndex)
+    {
+        lock (_lock)
+        {
+            if (_inlineSequence == null) return false;
+
+            var sortedCount = _inlineSequence.Steps.Count;
+            if (stepIndex < 0 || stepIndex >= sortedCount) return false;
+        }
+
+        // lock外で呼ぶ（StartSequenceInline内部でlockを取得するため）
+        StartSequenceInline(_inlineSequence!, stepIndex);
+        _logger.LogInformation("API: ジャンプ → ステップ {Index}", stepIndex);
+        return true;
+    }
+
     /// <summary>実行中のシーケンスを停止する。</summary>
     public void StopSequence()
     {
         lock (_lock)
         {
             StopSequenceInternal();
+            _inlineSequence = null;
         }
     }
 
-    /// <summary>シーケンスの再生状態を取得する。</summary>
-    public (bool IsPlaying, string? Name) GetSequenceStatus()
+    /// <summary>シーケンスの再生状態を取得する（ステップ情報付き）。</summary>
+    public (bool IsPlaying, string? Name, int CurrentStepIndex, int TotalStepCount) GetSequenceStatus()
     {
         lock (_lock)
         {
             bool playing = _sequenceTask != null && !_sequenceTask.IsCompleted;
-            return (playing, playing ? _currentSequenceName : null);
+            return (
+                playing,
+                playing ? _currentSequenceName : null,
+                _sequencePlayer.CurrentStepIndex,
+                _sequencePlayer.TotalStepCount
+            );
         }
     }
 

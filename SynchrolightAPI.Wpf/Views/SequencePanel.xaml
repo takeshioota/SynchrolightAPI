@@ -17,6 +17,43 @@
         <!-- ========== 左ペイン: シーケンス一覧 & 再生 ========== -->
         <GroupBox Grid.Column="0" Header="シーケンス一覧">
             <DockPanel Margin="4">
+                <!-- 記録コントロール（上部固定） -->
+                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                    <!-- 記録開始ボタン（未記録時のみ表示） -->
+                    <Button Content="&#9679; 記録開始" Command="{Binding StartRecordingCommand}"
+                            Padding="10,6" FontWeight="Bold" FontSize="13"
+                            Background="#E8F5E9" Foreground="#2E7D32"
+                            HorizontalAlignment="Stretch" Margin="0,0,0,4">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <!-- 記録中パネル（記録中のみ表示） -->
+                    <StackPanel Visibility="{Binding IsRecording, Converter={StaticResource BoolToVis}}">
+                        <Border Background="#FFF3E0" CornerRadius="4" Padding="8,6" Margin="0,0,0,4">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Ellipse Width="8" Height="8" Fill="#F44336" Margin="0,2,6,0"/>
+                                    <TextBlock Text="記録中" FontWeight="Bold" Foreground="#E65100" FontSize="13"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding RecordingInfo}" Foreground="#BF360C"
+                                           FontSize="11" Margin="14,2,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Button Content="&#9632; 記録停止" Command="{Binding StopRecordingCommand}"
+                                Padding="10,6" FontWeight="Bold" FontSize="13"
+                                Background="#FFEBEE" Foreground="#C62828"
+                                HorizontalAlignment="Stretch"/>
+                    </StackPanel>
+                    <Separator Margin="0,4,0,0"/>
+                </StackPanel>
+
                 <!-- 再生コントロール（下部固定） -->
                 <StackPanel DockPanel.Dock="Bottom" Margin="0,4,0,0">
                     <Separator Margin="0,0,0,4"/>
@@ -77,6 +114,22 @@
                         <Button Content="全クリア" Command="{Binding ClearStepsCommand}" Padding="6,2" Margin="0,0,2,2" Foreground="Red"/>
                     </WrapPanel>
 
+                    <!-- 簡単登録: 色+OFF -->
+                    <WrapPanel Margin="0,0,0,2">
+                        <TextBlock Text="簡単登録:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="Bold"/>
+                        <Button Content="色+OFF 追加" Command="{Binding AddTemplateColorWithOffCommand}"
+                                Padding="8,2" Margin="0,0,6,2" Background="#C8E6C9" FontWeight="Bold"
+                                ToolTip="色(表示時間)+OFF のペアを追加。追加後に■ダブルクリックで色変更"/>
+                        <TextBlock Text="表示:" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                        <TextBox Text="{Binding ColorDurationMs, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="50" Margin="0,0,2,2" VerticalContentAlignment="Center"/>
+                        <TextBlock Text="ms" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="間隔:" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                        <TextBox Text="{Binding GapDurationMs, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="50" Margin="0,0,2,2" VerticalContentAlignment="Center"/>
+                        <TextBlock Text="ms" VerticalAlignment="Center"/>
+                    </WrapPanel>
+
                     <!-- ツールバー: テンプレート -->
                     <WrapPanel Margin="0,0,0,2">
                         <TextBlock Text="テンプレ:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="Bold"/>
@@ -90,6 +143,44 @@
                                 Padding="6,2" Margin="0,0,2,2" Background="#FFFFEC" ToolTip="7色変化+14秒後停止"/>
                         <Button Content="カウントダウン" Command="{Binding AddTemplateCountdownCommand}"
                                 Padding="6,2" Margin="0,0,2,2" Background="#FFF0E0" ToolTip="赤→黄→緑→消灯(3秒)"/>
+                    </WrapPanel>
+
+                    <!-- ツールバー: エディタ再生 -->
+                    <WrapPanel Margin="0,2,0,2">
+                        <TextBlock Text="再生:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="Bold"/>
+                        <Button Content="&#9654; 連続再生" Command="{Binding PlayEditorCommand}"
+                                Padding="6,2" Margin="0,0,2,2" Background="#E8F5E9" FontWeight="Bold"
+                                ToolTip="エディタ内容を連続再生（ハイライト付き）">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsPlayingInline}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="&#9654; 繰り返し再生" Command="{Binding PlayEditorLoopCommand}"
+                                Padding="6,2" Margin="0,0,2,2" Background="#FFF9C4" FontWeight="Bold"
+                                ToolTip="エディタ内容を停止するまで繰り返し再生">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsPlayingInline}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="&#9654;| ステップ再生" Command="{Binding PlayStepCommand}"
+                                Padding="6,2" Margin="0,0,2,2" Background="#E3F2FD"
+                                ToolTip="選択した1ステップだけ即時実行"/>
+                        <Button Content="&#9632; 停止" Command="{Binding StopEditorCommand}"
+                                Padding="6,2" Margin="0,0,2,2" Foreground="Red"
+                                Visibility="{Binding IsPlayingInline, Converter={StaticResource BoolToVis}}"
+                                ToolTip="エディタ再生を停止"/>
                     </WrapPanel>
 
                     <Separator Margin="0,2,0,0"/>
@@ -108,13 +199,25 @@
                           RowHeaderWidth="0"
                           FontSize="12"
                           AlternatingRowBackground="#FAFAFA">
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                                    <Setter Property="Background" Value="#FFFDE7"/>
+                                    <Setter Property="FontWeight" Value="Bold"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGrid.RowStyle>
                     <DataGrid.Columns>
                         <!-- 色プレビュー -->
                         <DataGridTemplateColumn Header="" Width="24" IsReadOnly="True">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <Border Width="16" Height="16" CornerRadius="2"
-                                            BorderBrush="Gray" BorderThickness="1">
+                                            BorderBrush="Gray" BorderThickness="1"
+                                            Cursor="Hand" ToolTip="ダブルクリックで色選択"
+                                            MouseLeftButtonDown="ColorPreview_MouseLeftButtonDown">
                                         <Border.Background>
                                             <MultiBinding Converter="{StaticResource RgbToBrush}">
                                                 <Binding Path="R"/>
@@ -128,8 +231,8 @@
                         </DataGridTemplateColumn>
 
                         <!-- 時刻 -->
-                        <DataGridTextColumn Header="ms" Binding="{Binding TimeOffsetMs}" Width="65"/>
-                        <DataGridTextColumn Header="秒" Binding="{Binding TimeLabel, Mode=OneWay}" Width="45" IsReadOnly="True">
+                        <DataGridTextColumn Header="開始(ms)" Binding="{Binding TimeOffsetMs}" Width="70"/>
+                        <DataGridTextColumn Header="(秒)" Binding="{Binding TimeLabel, Mode=OneWay}" Width="45" IsReadOnly="True">
                             <DataGridTextColumn.ElementStyle>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Foreground" Value="Gray"/>
@@ -138,8 +241,8 @@
                             </DataGridTextColumn.ElementStyle>
                         </DataGridTextColumn>
 
-                        <!-- 種別 -->
-                        <DataGridComboBoxColumn Header="種別" SelectedItemBinding="{Binding CommandType}" Width="85">
+                        <!-- コマンド -->
+                        <DataGridComboBoxColumn Header="コマンド" SelectedItemBinding="{Binding CommandType}" Width="85">
                             <DataGridComboBoxColumn.ElementStyle>
                                 <Style TargetType="ComboBox">
                                     <Setter Property="ItemsSource" Value="{Binding DataContext.CommandTypes, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
@@ -161,7 +264,7 @@
                         <DataGridTextColumn Header="再送" Binding="{Binding RetransmitCount}" Width="38"/>
 
                         <!-- エフェクト -->
-                        <DataGridComboBoxColumn Header="Effect" SelectedItemBinding="{Binding EffectType}" Width="80">
+                        <DataGridComboBoxColumn Header="エフェクト" SelectedItemBinding="{Binding EffectType}" Width="80">
                             <DataGridComboBoxColumn.ElementStyle>
                                 <Style TargetType="ComboBox">
                                     <Setter Property="ItemsSource" Value="{Binding DataContext.EffectTypes, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
@@ -175,7 +278,7 @@
                         </DataGridComboBoxColumn>
 
                         <!-- エフェクト周期 -->
-                        <DataGridTextColumn Header="周期ms" Binding="{Binding EffectCycleDurationMs}" Width="55"/>
+                        <DataGridTextColumn Header="周期(ms)" Binding="{Binding EffectCycleDurationMs}" Width="55"/>
 
                         <!-- Fadeステップ -->
                         <DataGridTextColumn Header="Fade" Binding="{Binding FadeSteps}" Width="40"/>

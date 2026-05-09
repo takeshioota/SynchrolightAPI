@@ -8,7 +8,7 @@ namespace SynchrolightAPI.Api.Controllers;
 
 [ApiController]
 [Route("api/effect")]
-public class EffectController(EffectRunnerService runner) : ControllerBase
+public class EffectController(EffectRunnerService runner, SequenceRecorder recorder) : ControllerBase
 {
     // POST /api/effect/start
     [HttpPost("start")]
@@ -28,6 +28,13 @@ public class EffectController(EffectRunnerService runner) : ControllerBase
             Continuous: req.Continuous ?? true
         );
 
+        recorder.RecordEffectStart(
+            req.Type,
+            effectParams.Color.R, effectParams.Color.G, effectParams.Color.B,
+            effectParams.Field,
+            req.CycleDurationMs,
+            req.FadeSteps);
+
         runner.StartEffect(effectParams);
 
         return Ok(new ApiResponse(true,
@@ -38,6 +45,7 @@ public class EffectController(EffectRunnerService runner) : ControllerBase
     [HttpPost("stop")]
     public IActionResult Stop()
     {
+        recorder.RecordEffectStop();
         runner.StopEffect();
         return Ok(new ApiResponse(true, Message: "Effect stopped"));
     }

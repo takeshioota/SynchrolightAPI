@@ -292,8 +292,62 @@ public class SynchrolightApiClient
         return new SequenceStatusResult(
             data.GetProperty("isPlaying").GetBoolean(),
             data.TryGetProperty("sequenceName", out var sn) && sn.ValueKind != JsonValueKind.Null
-                ? sn.GetString() : null);
+                ? sn.GetString() : null,
+            data.TryGetProperty("currentStepIndex", out var csi) ? csi.GetInt32() : -1,
+            data.TryGetProperty("totalStepCount", out var tsc) ? tsc.GetInt32() : 0);
     }
+
+    public async Task<bool> PlaySequenceInlineAsync(List<SequenceStep> steps, bool loop = false)
+    {
+        var body = new { steps, loop };
+        var resp = await _http.PostAsJsonAsync("api/sequence/play/inline", body, JsonOptions);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> PlaySingleStepAsync(SequenceStep step)
+    {
+        var body = new { step };
+        var resp = await _http.PostAsJsonAsync("api/sequence/play/step", body, JsonOptions);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> JumpToStepAsync(int stepIndex)
+    {
+        var body = new { stepIndex };
+        var resp = await _http.PostAsJsonAsync("api/sequence/play/jump", body, JsonOptions);
+        return resp.IsSuccessStatusCode;
+    }
+    // =========================================================
+    //  Sequence Recording
+    // =========================================================
+
+    public async Task<bool> StartRecordingAsync()
+    {
+        var resp = await _http.PostAsync("api/sequence/record/start", null);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<List<SequenceStep>?> StopRecordingAsync()
+    {
+        var resp = await _http.PostAsync("api/sequence/record/stop", null);
+        if (!resp.IsSuccessStatusCode) return null;
+
+        var json = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        var data = json.GetProperty("data");
+        var stepsJson = data.GetProperty("steps");
+        return JsonSerializer.Deserialize<List<SequenceStep>>(stepsJson.GetRawText(), JsonOptions);
+    }
+
+    public async Task<RecordingStatusResult> GetRecordingStatusAsync()
+    {
+        var resp = await _http.GetFromJsonAsync<JsonElement>("api/sequence/record/status", JsonOptions);
+        var data = resp.GetProperty("data");
+        return new RecordingStatusResult(
+            data.GetProperty("isRecording").GetBoolean(),
+            data.GetProperty("stepCount").GetInt32(),
+            data.GetProperty("elapsedMs").GetInt32());
+    }
+
     // =========================================================
     //  Send Log — SSEストリーム
     // =========================================================
@@ -331,8 +385,10 @@ public class SynchrolightApiClient
 // --- Result types ---
 
 public record EffectStatusResult(bool IsRunning, string? EffectType);
-public record SequenceStatusResult(bool IsPlaying, string? SequenceName);
+public record SequenceStatusResult(bool IsPlaying, string? SequenceName,
+    int CurrentStepIndex = -1, int TotalStepCount = 0);
 public record TransportStatusResult(
     int QueueLength, int HighPriorityQueueLength,
     int ConnectedPorts, int DisconnectedPorts, string? LastError);
+public record RecordingStatusResult(bool IsRecording, int StepCount, int ElapsedMs);
 public record SendLogEntryDto(long Seq, DateTime Timestamp, string Direction, string Hex);

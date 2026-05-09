@@ -39,10 +39,20 @@ public class SequencePlayer
     /// <summary>現在再生中かどうか</summary>
     public bool IsPlaying { get; private set; }
 
+    /// <summary>再生中のステップインデックス (-1 = 未再生)</summary>
+    public volatile int CurrentStepIndex = -1;
+
+    /// <summary>再生中のシーケンスの総ステップ数</summary>
+    public int TotalStepCount { get; private set; }
+
     /// <summary>
     /// シーケンスを再生する。CancellationToken でキャンセルするまで実行。
     /// </summary>
-    public async Task PlayAsync(Sequence sequence, CancellationToken ct)
+    /// <param name="sequence">再生するシーケンス</param>
+    /// <param name="ct">キャンセルトークン</param>
+    /// <param name="startFromIndex">再生開始ステップインデックス（ソート後の順序）</param>
+    public async Task PlayAsync(Sequence sequence, CancellationToken ct,
+        int startFromIndex = 0, bool loop = false)
     {
         if (sequence.Steps.Count == 0)
         {
@@ -51,26 +61,44 @@ public class SequencePlayer
         }
 
         IsPlaying = true;
-        _logger.LogInformation("シーケンス再生開始: {Name} ({StepCount}ステップ)", sequence.Name, sequence.Steps.Count);
-
         var sortedSteps = sequence.Steps.OrderBy(s => s.TimeOffsetMs).ToList();
-        var sw = Stopwatch.StartNew();
+        TotalStepCount = sortedSteps.Count;
+        CurrentStepIndex = startFromIndex;
+
+        _logger.LogInformation("シーケンス再生開始: {Name} ({StepCount}ステップ, 開始={Start}, ループ={Loop})",
+            sequence.Name, sortedSteps.Count, startFromIndex, loop);
 
         try
         {
-            foreach (var step in sortedSteps)
+            do
             {
-                ct.ThrowIfCancellationRequested();
+                // ジャンプ対応: 開始ステップの時刻を基準とする
+                var baseTimeMs = startFromIndex < sortedSteps.Count
+                    ? sortedSteps[startFromIndex].TimeOffsetMs
+                    : 0;
+                var sw = Stopwatch.StartNew();
 
-                // 指定時刻まで待機
-                var waitMs = step.TimeOffsetMs - (int)sw.ElapsedMilliseconds;
-                if (waitMs > 0)
+                for (int i = startFromIndex; i < sortedSteps.Count; i++)
                 {
-                    await Task.Delay(waitMs, ct);
+                    ct.ThrowIfCancellationRequested();
+
+                    CurrentStepIndex = i;
+                    var step = sortedSteps[i];
+
+                    // 指定時刻まで待機（基準時刻からの相対）
+                    var waitMs = (step.TimeOffsetMs - baseTimeMs) - (int)sw.ElapsedMilliseconds;
+                    if (waitMs > 0)
+                    {
+                        await Task.Delay(waitMs, ct);
+                    }
+
+                    await ExecuteStepAsync(step, ct);
                 }
 
-                await ExecuteStepAsync(step, ct);
-            }
+                // ループ時は先頭に戻る（startFromIndexは初回のみ使用）
+                startFromIndex = 0;
+
+            } while (loop && !ct.IsCancellationRequested);
 
             _logger.LogInformation("シーケンス再生完了: {Name}", sequence.Name);
         }
@@ -82,10 +110,13 @@ public class SequencePlayer
         finally
         {
             IsPlaying = false;
+            CurrentStepIndex = -1;
+            TotalStepCount = 0;
         }
     }
 
-    private async Task ExecuteStepAsync(SequenceStep step, CancellationToken ct)
+    /// <summary>単一ステップを即時実行する。</summary>
+    public async Task ExecuteStepAsync(SequenceStep step, CancellationToken ct)
     {
         var options = step.RetransmitCount.HasValue
             ? SendOptions.Default with { RetransmitCount = step.RetransmitCount }
