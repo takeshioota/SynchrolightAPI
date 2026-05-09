@@ -38,6 +38,7 @@ builder.Services.AddSingleton<EffectScheduler>();
 builder.Services.AddSingleton<EffectEngine>();
 builder.Services.AddSingleton<SequenceStore>();
 builder.Services.AddSingleton<SequencePlayer>();
+builder.Services.AddSingleton<SequenceRecorder>();
 builder.Services.AddSingleton<EffectRunnerService>();
 
 var app = builder.Build();
