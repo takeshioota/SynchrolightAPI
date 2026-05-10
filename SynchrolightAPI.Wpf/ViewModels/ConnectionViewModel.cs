@@ -28,6 +28,42 @@ public partial class ConnectionViewModel : ObservableObject
         _ = ScanPortsAsync();
     }
 
+    /// <summary>
+    /// 全ポートをスキャン→全選択→接続する（起動時自動接続用）
+    /// </summary>
+    public async Task<bool> ScanAndConnectAllAsync()
+    {
+        try
+        {
+            var portNames = await _apiClient.ScanPortsAsync();
+            Ports.Clear();
+            foreach (var name in portNames)
+                Ports.Add(new ComPortItem(name, true));
+
+            if (Ports.Count == 0)
+            {
+                StatusText = "COMポートなし";
+                return false;
+            }
+
+            var selected = Ports.Select(p => p.Name).ToList();
+            _settings.Update(s => s.SelectedPorts = selected);
+
+            await _apiClient.ConnectAsync(selected);
+            var status = await _apiClient.GetTransportStatusAsync();
+            IsConnected = status.ConnectedPorts > 0;
+            StatusText = IsConnected
+                ? $"接続済 ({status.ConnectedPorts})"
+                : "接続失敗";
+            return IsConnected;
+        }
+        catch (HttpRequestException)
+        {
+            StatusText = "API接続エラー";
+            return false;
+        }
+    }
+
     [RelayCommand]
     private async Task ScanPortsAsync()
     {

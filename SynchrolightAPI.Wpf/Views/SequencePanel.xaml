@@ -64,8 +64,6 @@
                                 Padding="10,6" FontSize="13" Foreground="Red"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                        <Button Content="エディタへ読込" Command="{Binding LoadToEditorCommand}"
-                                Padding="6,3" Margin="0,0,4,0"/>
                         <Button Content="削除" Command="{Binding DeleteSelectedCommand}"
                                 Padding="6,3" Foreground="Red"/>
                     </StackPanel>
@@ -86,8 +84,15 @@
         <GridSplitter Grid.Column="1" Width="3" HorizontalAlignment="Center"
                       VerticalAlignment="Stretch" Background="LightGray"/>
 
-        <!-- ========== 右ペイン: シーケンスエディタ ========== -->
-        <GroupBox Grid.Column="2" Header="シーケンスエディタ">
+        <!-- ========== 右ペイン: シーケンスエディタ + ログ ========== -->
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" MinHeight="200"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="150" MinHeight="80"/>
+            </Grid.RowDefinitions>
+
+            <GroupBox Grid.Row="0" Header="シーケンスエディタ">
             <DockPanel Margin="4">
 
                 <!-- 上段: 名前 & 保存 -->
@@ -174,9 +179,6 @@
                                 </Style>
                             </Button.Style>
                         </Button>
-                        <Button Content="&#9654;| ステップ再生" Command="{Binding PlayStepCommand}"
-                                Padding="6,2" Margin="0,0,2,2" Background="#E3F2FD"
-                                ToolTip="選択した1ステップだけ即時実行"/>
                         <Button Content="&#9632; 停止" Command="{Binding StopEditorCommand}"
                                 Padding="6,2" Margin="0,0,2,2" Foreground="Red"
                                 Visibility="{Binding IsPlayingInline, Converter={StaticResource BoolToVis}}"
@@ -187,7 +189,8 @@
                 </StackPanel>
 
                 <!-- 下段: DataGrid -->
-                <DataGrid ItemsSource="{Binding EditSteps}"
+                <DataGrid x:Name="StepDataGrid"
+                          ItemsSource="{Binding EditSteps}"
                           SelectedItem="{Binding SelectedStep}"
                           AutoGenerateColumns="False"
                           CanUserAddRows="False"
@@ -198,7 +201,10 @@
                           GridLinesVisibility="Horizontal"
                           RowHeaderWidth="0"
                           FontSize="12"
-                          AlternatingRowBackground="#FAFAFA">
+                          AlternatingRowBackground="#FAFAFA"
+                          PreviewKeyDown="StepDataGrid_PreviewKeyDown"
+                          BeginningEdit="StepDataGrid_BeginningEdit"
+                          CellEditEnding="StepDataGrid_CellEditEnding">
                     <DataGrid.RowStyle>
                         <Style TargetType="DataGridRow">
                             <Style.Triggers>
@@ -299,6 +305,33 @@
                     </DataGrid.Columns>
                 </DataGrid>
             </DockPanel>
-        </GroupBox>
+            </GroupBox>
+
+            <GridSplitter Grid.Row="1" Height="3" HorizontalAlignment="Stretch"
+                          VerticalAlignment="Center" Background="LightGray"/>
+
+            <!-- 送信ログ -->
+            <GroupBox Grid.Row="2">
+                <GroupBox.Header>
+                    <DockPanel LastChildFill="True">
+                        <Button Content="クリア" Command="{Binding SendLog.ClearCommand}"
+                                DockPanel.Dock="Right" Padding="8,1"/>
+                        <TextBlock Text="送信ログ" VerticalAlignment="Center"/>
+                    </DockPanel>
+                </GroupBox.Header>
+                <ListView ItemsSource="{Binding SendLog.Entries}"
+                          x:Name="SeqLogListView"
+                          FontFamily="Consolas" FontSize="12"
+                          VirtualizingStackPanel.IsVirtualizing="True"
+                          VirtualizingStackPanel.VirtualizationMode="Recycling"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Display}"/>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </GroupBox>
+        </Grid>
     </Grid>
 </UserControl>

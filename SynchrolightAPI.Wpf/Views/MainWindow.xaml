@@ -10,7 +10,8 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d">
-    <TabControl Background="Transparent" BorderThickness="0" Padding="4">
+    <TabControl Background="Transparent" BorderThickness="0" Padding="4"
+                SelectedIndex="{Binding SelectedTabIndex}">
         <TabControl.Resources>
             <Style TargetType="TabItem">
                 <Setter Property="FontSize" Value="13"/>
