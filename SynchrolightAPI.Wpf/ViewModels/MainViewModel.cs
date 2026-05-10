@@ -1,7 +1,11 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+
 namespace SynchrolightAPI.Wpf.ViewModels;
 
-public class MainViewModel
+public partial class MainViewModel : ObservableObject
 {
+    [ObservableProperty]
+    private int _selectedTabIndex;
     public ConnectionViewModel Connection { get; }
     public TransmitterSettingsViewModel TransmitterSettings { get; }
     public CommandPanelViewModel CommandPanel { get; }

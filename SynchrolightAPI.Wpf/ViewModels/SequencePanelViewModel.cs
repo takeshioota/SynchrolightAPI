@@ -35,6 +35,12 @@ public partial class SequencePanelViewModel : ObservableObject
     [ObservableProperty]
     private string? _selectedSequenceName;
 
+    partial void OnSelectedSequenceNameChanged(string? value)
+    {
+        if (!string.IsNullOrEmpty(value))
+            _ = LoadToEditorAsync();
+    }
+
     public ObservableCollection<string> SequenceNames { get; } = [];
 
     // --- 新規シーケンス作成用 ---
@@ -67,10 +73,14 @@ public partial class SequencePanelViewModel : ObservableObject
     private bool _suppressJump;
     private bool _isJumping;
     private int _highlightedStepIndex = -1;
+    private CancellationTokenSource? _autoPlayCts;
 
-    public SequencePanelViewModel(SynchrolightApiClient apiClient)
+    public SendLogViewModel SendLog { get; }
+
+    public SequencePanelViewModel(SynchrolightApiClient apiClient, SendLogViewModel sendLog)
     {
         _apiClient = apiClient;
+        SendLog = sendLog;
         _ = RefreshListAsync();
         EditSteps.CollectionChanged += (_, _) => UpdateEditorInfo();
     }
@@ -161,19 +171,31 @@ public partial class SequencePanelViewModel : ObservableObject
         _pollCts?.Dispose();
         _pollCts = null;
 
-        if (IsPlaying)
+        // シーケンス・エフェクトをすべて停止
+        try
         {
             await _apiClient.StopSequenceAsync();
-            Status = "停止しました";
+            await _apiClient.StopEffectAsync();
         }
+        catch (HttpRequestException) { }
 
         IsPlaying = false;
+        Status = "停止しました";
     }
 
     [RelayCommand]
     private async Task DeleteSelectedAsync()
     {
         if (string.IsNullOrEmpty(SelectedSequenceName)) return;
+
+        var result = System.Windows.MessageBox.Show(
+            $"シーケンス「{SelectedSequenceName}」を削除しますか？",
+            "削除の確認",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning);
+
+        if (result != System.Windows.MessageBoxResult.Yes) return;
+
         await _apiClient.DeleteSequenceAsync(SelectedSequenceName);
         await RefreshListAsync();
         Status = "削除しました";
@@ -239,7 +261,7 @@ public partial class SequencePanelViewModel : ObservableObject
                 {
                     while (!token.IsCancellationRequested)
                     {
-                        await Task.Delay(200, token);
+                        await Task.Delay(50, token);
                         var status = await _apiClient.GetSequenceStatusAsync();
                         App.Current?.Dispatcher.Invoke(() =>
                         {
@@ -298,6 +320,29 @@ public partial class SequencePanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Enterキーによるステップ順次再生: 現在のステップを再生し、選択を次の行へ移動する。
+    /// </summary>
+    [RelayCommand]
+    private async Task PlayStepAndAdvanceAsync()
+    {
+        if (SelectedStep == null || EditSteps.Count == 0) return;
+
+        var currentIndex = EditSteps.IndexOf(SelectedStep);
+        if (currentIndex < 0) return;
+
+        // 現在のステップを再生
+        await PlayStepAsync();
+
+        // 次の行へ移動（最終行では移動しない）
+        if (currentIndex + 1 < EditSteps.Count)
+        {
+            _suppressJump = true;
+            SelectedStep = EditSteps[currentIndex + 1];
+            _suppressJump = false;
+        }
+    }
+
     [RelayCommand]
     private async Task StopEditorAsync()
     {
@@ -319,14 +364,37 @@ public partial class SequencePanelViewModel : ObservableObject
     // --- ジャンプ: 連続再生中にステップをクリックするとそこから再生再開 ---
     partial void OnSelectedStepChanged(StepEditItem? value)
     {
-        if (!IsPlayingInline || _suppressJump || value == null) return;
+        if (_suppressJump || value == null) return;
 
-        var idx = EditSteps.IndexOf(value);
-        if (idx >= 0 && idx != _highlightedStepIndex)
+        if (IsPlayingInline)
         {
-            _isJumping = true;
-            _ = JumpToStepInternalAsync(idx);
+            var idx = EditSteps.IndexOf(value);
+            if (idx >= 0 && idx != _highlightedStepIndex)
+            {
+                _isJumping = true;
+                _ = JumpToStepInternalAsync(idx);
+            }
         }
+        else
+        {
+            // 前回の自動再生をキャンセルして最新のみ実行
+            _autoPlayCts?.Cancel();
+            _autoPlayCts?.Dispose();
+            var cts = new CancellationTokenSource();
+            _autoPlayCts = cts;
+            _ = AutoPlayAsync(cts.Token);
+        }
+    }
+
+    private async Task AutoPlayAsync(CancellationToken ct)
+    {
+        try
+        {
+            // 短いデバウンスで高速連打時の多重呼び出しを防止
+            await Task.Delay(30, ct);
+            await PlayStepAsync();
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task JumpToStepInternalAsync(int stepIndex)
@@ -353,6 +421,7 @@ public partial class SequencePanelViewModel : ObservableObject
     private void UpdateHighlight(int stepIndex)
     {
         if (_isJumping) return;
+        if (stepIndex == _highlightedStepIndex) return;
 
         // 前のハイライトをクリア
         if (_highlightedStepIndex >= 0 && _highlightedStepIndex < EditSteps.Count)
@@ -379,10 +448,42 @@ public partial class SequencePanelViewModel : ObservableObject
     [RelayCommand]
     private void AddStep()
     {
-        EditSteps.Add(new StepEditItem
+        int timeOffsetMs;
+
+        if (SelectedStep != null)
         {
-            TimeOffsetMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0
-        });
+            var idx = EditSteps.IndexOf(SelectedStep);
+            if (idx + 1 < EditSteps.Count)
+            {
+                // 間に挿入: 前後の中間値
+                timeOffsetMs = (SelectedStep.TimeOffsetMs + EditSteps[idx + 1].TimeOffsetMs) / 2;
+            }
+            else
+            {
+                // 末尾の次: 選択行 + 1000ms
+                timeOffsetMs = SelectedStep.TimeOffsetMs + 1000;
+            }
+        }
+        else
+        {
+            timeOffsetMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
+        }
+
+        var newStep = new StepEditItem { TimeOffsetMs = timeOffsetMs };
+
+        if (SelectedStep != null)
+        {
+            var idx = EditSteps.IndexOf(SelectedStep);
+            EditSteps.Insert(idx + 1, newStep);
+        }
+        else
+        {
+            EditSteps.Add(newStep);
+        }
+
+        _suppressJump = true;
+        SelectedStep = newStep;
+        _suppressJump = false;
     }
 
     [RelayCommand]
@@ -427,7 +528,9 @@ public partial class SequencePanelViewModel : ObservableObject
         if (SelectedStep == null) return;
         var idx = EditSteps.IndexOf(SelectedStep);
         if (idx <= 0) return;
+        _suppressJump = true;
         EditSteps.Move(idx, idx - 1);
+        _suppressJump = false;
     }
 
     [RelayCommand]
@@ -436,7 +539,9 @@ public partial class SequencePanelViewModel : ObservableObject
         if (SelectedStep == null) return;
         var idx = EditSteps.IndexOf(SelectedStep);
         if (idx < 0 || idx >= EditSteps.Count - 1) return;
+        _suppressJump = true;
         EditSteps.Move(idx, idx + 1);
+        _suppressJump = false;
     }
 
     [RelayCommand]

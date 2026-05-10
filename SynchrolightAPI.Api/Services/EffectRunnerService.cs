@@ -30,6 +30,7 @@ public class EffectRunnerService
     // Inline sequence state (ジャンプ用に保持)
     private Sequence? _inlineSequence;
 
+
     public EffectRunnerService(
         EffectEngine effectEngine,
         EffectScheduler scheduler,
