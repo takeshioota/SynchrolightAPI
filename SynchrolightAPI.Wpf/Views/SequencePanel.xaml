@@ -111,7 +111,13 @@
                     <!-- ツールバー: ステップ操作 -->
                     <WrapPanel Margin="0,0,0,2">
                         <TextBlock Text="操作:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="Bold"/>
-                        <Button Content="+ 追加" Command="{Binding AddStepCommand}" Padding="6,2" Margin="0,0,2,2"/>
+                        <Button Content="+ 追加" Command="{Binding AddStepCommand}" Padding="6,2" Margin="0,0,2,2"
+                                ToolTip="選択行の下に空行を挿入"/>
+                        <Button Content="挿入終了" Command="{Binding InsertEndCommand}"
+                                Padding="8,2" Margin="0,0,6,2"
+                                Background="#FFCDD2" FontWeight="Bold"
+                                ToolTip="空行を削除して繰り返し再生"
+                                Visibility="{Binding IsInsertMode, Converter={StaticResource BoolToVis}}"/>
                         <Button Content="複製" Command="{Binding DuplicateStepCommand}" Padding="6,2" Margin="0,0,2,2"/>
                         <Button Content="&#9650;" Command="{Binding MoveStepUpCommand}" Padding="6,2" Margin="0,0,2,2" ToolTip="上へ移動"/>
                         <Button Content="&#9660;" Command="{Binding MoveStepDownCommand}" Padding="6,2" Margin="0,0,2,2" ToolTip="下へ移動"/>
@@ -119,17 +125,16 @@
                         <Button Content="全クリア" Command="{Binding ClearStepsCommand}" Padding="6,2" Margin="0,0,2,2" Foreground="Red"/>
                     </WrapPanel>
 
-                    <!-- 簡単登録: 色+OFF -->
+                    <!-- 簡単登録 -->
                     <WrapPanel Margin="0,0,0,2">
                         <TextBlock Text="簡単登録:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="Bold"/>
-                        <Button Content="色+OFF 追加" Command="{Binding AddTemplateColorWithOffCommand}"
-                                Padding="8,2" Margin="0,0,6,2" Background="#C8E6C9" FontWeight="Bold"
-                                ToolTip="色(表示時間)+OFF のペアを追加。追加後に■ダブルクリックで色変更"/>
-                        <TextBlock Text="表示:" VerticalAlignment="Center" Margin="0,0,2,0"/>
-                        <TextBox Text="{Binding ColorDurationMs, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="50" Margin="0,0,2,2" VerticalContentAlignment="Center"/>
-                        <TextBlock Text="ms" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <TextBlock Text="間隔:" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                        <Button Content="色" Command="{Binding AddQuickColorCommand}"
+                                Padding="8,2" Margin="0,0,2,2" Background="#C8E6C9" FontWeight="Bold"
+                                ToolTip="色（点灯）ステップを追加。■ダブルクリックで色変更"/>
+                        <Button Content="OFF" Command="{Binding AddQuickOffCommand}"
+                                Padding="8,2" Margin="0,0,2,2" Background="#EEEEEE" FontWeight="Bold"
+                                ToolTip="消灯ステップを追加"/>
+                        <TextBlock Text="間隔:" VerticalAlignment="Center" Margin="8,0,2,0"/>
                         <TextBox Text="{Binding GapDurationMs, UpdateSourceTrigger=PropertyChanged}"
                                  Width="50" Margin="0,0,2,2" VerticalContentAlignment="Center"/>
                         <TextBlock Text="ms" VerticalAlignment="Center"/>
@@ -201,15 +206,23 @@
                           GridLinesVisibility="Horizontal"
                           RowHeaderWidth="0"
                           FontSize="12"
-                          AlternatingRowBackground="#FAFAFA"
+                          AlternationCount="2"
                           PreviewKeyDown="StepDataGrid_PreviewKeyDown"
                           BeginningEdit="StepDataGrid_BeginningEdit"
                           CellEditEnding="StepDataGrid_CellEditEnding">
                     <DataGrid.RowStyle>
                         <Style TargetType="DataGridRow">
                             <Style.Triggers>
+                                <Trigger Property="AlternationIndex" Value="1">
+                                    <Setter Property="Background" Value="#FAFAFA"/>
+                                </Trigger>
+                                <DataTrigger Binding="{Binding IsPendingInsert}" Value="True">
+                                    <Setter Property="Background" Value="#F0F0F0"/>
+                                    <Setter Property="FontStyle" Value="Italic"/>
+                                    <Setter Property="Foreground" Value="#999999"/>
+                                </DataTrigger>
                                 <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
-                                    <Setter Property="Background" Value="#FFFDE7"/>
+                                    <Setter Property="Background" Value="#BBDEFB"/>
                                     <Setter Property="FontWeight" Value="Bold"/>
                                 </DataTrigger>
                             </Style.Triggers>
