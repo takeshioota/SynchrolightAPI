@@ -59,16 +59,17 @@ public partial class SequencePanelViewModel : ObservableObject
     [ObservableProperty]
     private string _editorInfo = "0 ステップ";
 
-    // --- 簡単登録: 色+OFF設定 ---
-    [ObservableProperty]
-    private int _colorDurationMs = 1000;
-
+    // --- 簡単登録設定 ---
     [ObservableProperty]
     private int _gapDurationMs = 500;
 
     // --- エディタ再生状態 ---
     [ObservableProperty]
     private bool _isPlayingInline;
+
+    // --- 挿入モード ---
+    [ObservableProperty]
+    private bool _isInsertMode;
 
     private bool _suppressJump;
     private bool _isJumping;
@@ -455,21 +456,25 @@ public partial class SequencePanelViewModel : ObservableObject
             var idx = EditSteps.IndexOf(SelectedStep);
             if (idx + 1 < EditSteps.Count)
             {
-                // 間に挿入: 前後の中間値
                 timeOffsetMs = (SelectedStep.TimeOffsetMs + EditSteps[idx + 1].TimeOffsetMs) / 2;
             }
             else
             {
-                // 末尾の次: 選択行 + 1000ms
-                timeOffsetMs = SelectedStep.TimeOffsetMs + 1000;
+                timeOffsetMs = SelectedStep.TimeOffsetMs + GapDurationMs;
             }
         }
         else
         {
-            timeOffsetMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
+            timeOffsetMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + GapDurationMs : 0;
         }
 
-        var newStep = new StepEditItem { TimeOffsetMs = timeOffsetMs };
+        // 空行（ペンディング）として挿入
+        var newStep = new StepEditItem
+        {
+            TimeOffsetMs = timeOffsetMs,
+            IsPendingInsert = true,
+            R = 0, G = 0, B = 0,
+        };
 
         if (SelectedStep != null)
         {
@@ -484,6 +489,7 @@ public partial class SequencePanelViewModel : ObservableObject
         _suppressJump = true;
         SelectedStep = newStep;
         _suppressJump = false;
+        IsInsertMode = true;
     }
 
     [RelayCommand]
@@ -557,10 +563,113 @@ public partial class SequencePanelViewModel : ObservableObject
     [RelayCommand]
     private void ClearSteps()
     {
+        IsInsertMode = false;
         _suppressJump = true;
         EditSteps.Clear();
         _suppressJump = false;
         Status = "ステップをクリアしました";
+    }
+
+    // =========================================================
+    //  挿入モード: ペンディング行チェーン
+    // =========================================================
+
+    /// <summary>
+    /// 選択中のペンディング行にコマンドデータを設定し、次のペンディング行を自動追加する。
+    /// ペンディング行が選択されていなければ false を返す。
+    /// </summary>
+    private bool TryFillPendingRow(Action<StepEditItem> fill,
+        Func<int, StepEditItem[]>? createAdditional = null)
+    {
+        if (SelectedStep == null || !SelectedStep.IsPendingInsert) return false;
+
+        var baseMs = SelectedStep.TimeOffsetMs;
+        fill(SelectedStep);
+        SelectedStep.IsPendingInsert = false;
+
+        var idx = EditSteps.IndexOf(SelectedStep);
+        var additional = createAdditional?.Invoke(baseMs) ?? [];
+
+        for (int i = 0; i < additional.Length; i++)
+            EditSteps.Insert(idx + 1 + i, additional[i]);
+
+        // 次のペンディング行を追加
+        var lastIdx = idx + additional.Length;
+        var lastStep = EditSteps[lastIdx];
+        var timeOffsetMs = lastStep.TimeOffsetMs + GapDurationMs;
+        var pendingRow = new StepEditItem
+        {
+            TimeOffsetMs = timeOffsetMs,
+            IsPendingInsert = true,
+            R = 0, G = 0, B = 0,
+        };
+        EditSteps.Insert(lastIdx + 1, pendingRow);
+
+        _suppressJump = true;
+        SelectedStep = pendingRow;
+        _suppressJump = false;
+
+        return true;
+    }
+
+    [RelayCommand]
+    private async Task InsertEndAsync()
+    {
+        IsInsertMode = false;
+
+        // ペンディング行をすべて削除
+        for (int i = EditSteps.Count - 1; i >= 0; i--)
+        {
+            if (EditSteps[i].IsPendingInsert)
+                EditSteps.RemoveAt(i);
+        }
+
+        if (EditSteps.Count == 0)
+        {
+            Status = "挿入完了";
+            return;
+        }
+
+        Status = "挿入完了 — 繰り返し再生開始";
+        await PlayEditorInternalAsync(loop: true);
+    }
+
+    // =========================================================
+    //  エディタ: 簡単登録（色・OFF）
+    // =========================================================
+
+    [RelayCommand]
+    private void AddQuickColor()
+    {
+        if (TryFillPendingRow(step =>
+        {
+            step.CommandType = SequenceCommandType.Color;
+            step.R = 0xFF; step.G = 0; step.B = 0;
+        })) return;
+
+        var baseMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + GapDurationMs : 0;
+        EditSteps.Add(new StepEditItem
+        {
+            TimeOffsetMs = baseMs,
+            CommandType = SequenceCommandType.Color,
+            R = 0xFF, G = 0, B = 0
+        });
+    }
+
+    [RelayCommand]
+    private void AddQuickOff()
+    {
+        if (TryFillPendingRow(step =>
+        {
+            step.CommandType = SequenceCommandType.Off;
+        })) return;
+
+        var baseMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + GapDurationMs : 0;
+        EditSteps.Add(new StepEditItem
+        {
+            TimeOffsetMs = baseMs,
+            CommandType = SequenceCommandType.Off
+        });
     }
 
     // =========================================================
@@ -570,99 +679,130 @@ public partial class SequencePanelViewModel : ObservableObject
     [RelayCommand]
     private void AddTemplateColor()
     {
+        if (TryFillPendingRow(step =>
+        {
+            step.CommandType = SequenceCommandType.Color;
+            step.R = 0xFF; step.G = 0; step.B = 0;
+        })) return;
+
         var baseMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
         EditSteps.Add(new StepEditItem { TimeOffsetMs = baseMs, CommandType = SequenceCommandType.Color, R = 0xFF, G = 0, B = 0 });
     }
 
     [RelayCommand]
-    private void AddTemplateColorWithOff()
-    {
-        // 前のステップの末尾から間隔を空けて開始
-        var baseMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + GapDurationMs : 0;
-
-        // Color ON（ダブルクリックで色変更可能）
-        EditSteps.Add(new StepEditItem
-        {
-            TimeOffsetMs = baseMs,
-            CommandType = SequenceCommandType.Color,
-            R = 0xFF, G = 0, B = 0
-        });
-
-        // 表示時間後に自動OFF
-        EditSteps.Add(new StepEditItem
-        {
-            TimeOffsetMs = baseMs + ColorDurationMs,
-            CommandType = SequenceCommandType.Off
-        });
-    }
-
-    [RelayCommand]
     private void AddTemplateFadeInOut()
     {
-        var baseMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
+        if (TryFillPendingRow(
+            step =>
+            {
+                step.CommandType = SequenceCommandType.Effect;
+                step.EffectType = SynchrolightAPI.Services.EffectType.Breathing;
+                step.R = 0xFF; step.G = 0; step.B = 0;
+                step.EffectCycleDurationMs = 2000;
+                step.FadeSteps = 20;
+            },
+            baseMs => [new StepEditItem
+            {
+                TimeOffsetMs = baseMs + 5000,
+                CommandType = SequenceCommandType.EffectStop,
+            }]
+        )) return;
+
+        var ms = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
         EditSteps.Add(new StepEditItem
         {
-            TimeOffsetMs = baseMs,
+            TimeOffsetMs = ms,
             CommandType = SequenceCommandType.Effect,
             EffectType = SynchrolightAPI.Services.EffectType.Breathing,
             R = 0xFF, G = 0, B = 0,
             EffectCycleDurationMs = 2000,
             FadeSteps = 20,
         });
-        EditSteps.Add(new StepEditItem
-        {
-            TimeOffsetMs = baseMs + 5000,
-            CommandType = SequenceCommandType.EffectStop,
-        });
+        EditSteps.Add(new StepEditItem { TimeOffsetMs = ms + 5000, CommandType = SequenceCommandType.EffectStop });
     }
 
     [RelayCommand]
     private void AddTemplateFlash()
     {
-        var baseMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
+        if (TryFillPendingRow(
+            step =>
+            {
+                step.CommandType = SequenceCommandType.Effect;
+                step.EffectType = SynchrolightAPI.Services.EffectType.Flash;
+                step.R = 0xFF; step.G = 0xFF; step.B = 0xFF;
+                step.EffectCycleDurationMs = 500;
+            },
+            baseMs => [new StepEditItem
+            {
+                TimeOffsetMs = baseMs + 3000,
+                CommandType = SequenceCommandType.EffectStop,
+            }]
+        )) return;
+
+        var ms = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
         EditSteps.Add(new StepEditItem
         {
-            TimeOffsetMs = baseMs,
+            TimeOffsetMs = ms,
             CommandType = SequenceCommandType.Effect,
             EffectType = SynchrolightAPI.Services.EffectType.Flash,
             R = 0xFF, G = 0xFF, B = 0xFF,
             EffectCycleDurationMs = 500,
         });
-        EditSteps.Add(new StepEditItem
-        {
-            TimeOffsetMs = baseMs + 3000,
-            CommandType = SequenceCommandType.EffectStop,
-        });
+        EditSteps.Add(new StepEditItem { TimeOffsetMs = ms + 3000, CommandType = SequenceCommandType.EffectStop });
     }
 
     [RelayCommand]
     private void AddTemplateSevenColor()
     {
-        var baseMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
+        if (TryFillPendingRow(
+            step =>
+            {
+                step.CommandType = SequenceCommandType.Effect;
+                step.EffectType = SynchrolightAPI.Services.EffectType.SevenColor;
+                step.EffectCycleDurationMs = 7000;
+                step.FadeSteps = 20;
+            },
+            baseMs => [new StepEditItem
+            {
+                TimeOffsetMs = baseMs + 14000,
+                CommandType = SequenceCommandType.EffectStop,
+            }]
+        )) return;
+
+        var ms = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
         EditSteps.Add(new StepEditItem
         {
-            TimeOffsetMs = baseMs,
+            TimeOffsetMs = ms,
             CommandType = SequenceCommandType.Effect,
             EffectType = SynchrolightAPI.Services.EffectType.SevenColor,
             EffectCycleDurationMs = 7000,
             FadeSteps = 20,
         });
-        EditSteps.Add(new StepEditItem
-        {
-            TimeOffsetMs = baseMs + 14000,
-            CommandType = SequenceCommandType.EffectStop,
-        });
+        EditSteps.Add(new StepEditItem { TimeOffsetMs = ms + 14000, CommandType = SequenceCommandType.EffectStop });
     }
 
     [RelayCommand]
     private void AddTemplateCountdown()
     {
-        // 赤→黄→緑→消灯の3秒カウントダウン
-        var baseMs = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
-        EditSteps.Add(new StepEditItem { TimeOffsetMs = baseMs, CommandType = SequenceCommandType.Color, R = 0xFF, G = 0x00, B = 0x00 });
-        EditSteps.Add(new StepEditItem { TimeOffsetMs = baseMs + 1000, CommandType = SequenceCommandType.Color, R = 0xFF, G = 0xFF, B = 0x00 });
-        EditSteps.Add(new StepEditItem { TimeOffsetMs = baseMs + 2000, CommandType = SequenceCommandType.Color, R = 0x00, G = 0xFF, B = 0x00 });
-        EditSteps.Add(new StepEditItem { TimeOffsetMs = baseMs + 3000, CommandType = SequenceCommandType.Off });
+        if (TryFillPendingRow(
+            step =>
+            {
+                step.CommandType = SequenceCommandType.Color;
+                step.R = 0xFF; step.G = 0x00; step.B = 0x00;
+            },
+            baseMs =>
+            [
+                new StepEditItem { TimeOffsetMs = baseMs + 1000, CommandType = SequenceCommandType.Color, R = 0xFF, G = 0xFF, B = 0x00 },
+                new StepEditItem { TimeOffsetMs = baseMs + 2000, CommandType = SequenceCommandType.Color, R = 0x00, G = 0xFF, B = 0x00 },
+                new StepEditItem { TimeOffsetMs = baseMs + 3000, CommandType = SequenceCommandType.Off },
+            ]
+        )) return;
+
+        var ms = EditSteps.Count > 0 ? EditSteps[^1].TimeOffsetMs + 1000 : 0;
+        EditSteps.Add(new StepEditItem { TimeOffsetMs = ms, CommandType = SequenceCommandType.Color, R = 0xFF, G = 0x00, B = 0x00 });
+        EditSteps.Add(new StepEditItem { TimeOffsetMs = ms + 1000, CommandType = SequenceCommandType.Color, R = 0xFF, G = 0xFF, B = 0x00 });
+        EditSteps.Add(new StepEditItem { TimeOffsetMs = ms + 2000, CommandType = SequenceCommandType.Color, R = 0x00, G = 0xFF, B = 0x00 });
+        EditSteps.Add(new StepEditItem { TimeOffsetMs = ms + 3000, CommandType = SequenceCommandType.Off });
     }
 
     // =========================================================
@@ -846,6 +986,7 @@ public partial class StepEditItem : ObservableObject
     [ObservableProperty] private int _effectCycleDurationMs;
     [ObservableProperty] private int _fadeSteps;
     [ObservableProperty] private bool _isHighlighted;
+    [ObservableProperty] private bool _isPendingInsert;
 
     /// <summary>時刻の秒表示（読み取り専用）</summary>
     public string TimeLabel => $"{TimeOffsetMs / 1000.0:F1}s";

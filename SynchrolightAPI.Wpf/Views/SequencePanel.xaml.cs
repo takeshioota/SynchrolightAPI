@@ -22,6 +22,17 @@ public partial class SequencePanel : UserControl
                         SeqLogListView.ScrollIntoView(SeqLogListView.Items[^1]);
                 };
             }
+
+            // 挿入モード中、選択行が変わったらスクロール追従
+            StepDataGrid.SelectionChanged += (_, _) =>
+            {
+                if (DataContext is SequencePanelViewModel vm
+                    && vm.IsInsertMode
+                    && StepDataGrid.SelectedItem != null)
+                {
+                    StepDataGrid.ScrollIntoView(StepDataGrid.SelectedItem);
+                }
+            };
         };
     }
 
@@ -33,6 +44,14 @@ public partial class SequencePanel : UserControl
     private void StepDataGrid_CellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
     {
         _isEditingCell = false;
+
+        // 手動セル編集でペンディング行を確定（空行→実データになる）
+        if (e.EditAction == DataGridEditAction.Commit
+            && e.Row.DataContext is StepEditItem editedStep
+            && editedStep.IsPendingInsert)
+        {
+            editedStep.IsPendingInsert = false;
+        }
     }
 
     private async void StepDataGrid_PreviewKeyDown(object sender, KeyEventArgs e)
