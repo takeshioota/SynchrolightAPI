@@ -50,6 +50,9 @@ public class SequenceStep
 
     /// <summary>Fade補間ステップ数</summary>
     public int? FadeSteps { get; set; }
+
+    /// <summary>連続再生するか（false=単発実行後に最終色保持）。デフォルト: true</summary>
+    public bool Continuous { get; set; } = true;
 }
 
 /// <summary>

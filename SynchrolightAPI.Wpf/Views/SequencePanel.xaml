@@ -302,6 +302,9 @@
                         <!-- Fadeステップ -->
                         <DataGridTextColumn Header="Fade" Binding="{Binding FadeSteps}" Width="40"/>
 
+                        <!-- 連続再生 -->
+                        <DataGridCheckBoxColumn Header="連続" Binding="{Binding Continuous}" Width="35"/>
+
                         <!-- 削除ボタン -->
                         <DataGridTemplateColumn Header="" Width="32">
                             <DataGridTemplateColumn.CellTemplate>

@@ -238,6 +238,7 @@ public partial class SequencePanelViewModel : ObservableObject
             EffectType = e.EffectType,
             EffectCycleDurationMs = e.EffectCycleDurationMs > 0 ? e.EffectCycleDurationMs : null,
             FadeSteps = e.FadeSteps > 0 ? e.FadeSteps : null,
+            Continuous = e.Continuous,
         }).ToList();
 
         try
@@ -308,6 +309,7 @@ public partial class SequencePanelViewModel : ObservableObject
             EffectType = SelectedStep.EffectType,
             EffectCycleDurationMs = SelectedStep.EffectCycleDurationMs > 0 ? SelectedStep.EffectCycleDurationMs : null,
             FadeSteps = SelectedStep.FadeSteps > 0 ? SelectedStep.FadeSteps : null,
+            Continuous = SelectedStep.Continuous,
         };
 
         try
@@ -891,6 +893,7 @@ public partial class SequencePanelViewModel : ObservableObject
                     EffectType = step.EffectType,
                     EffectCycleDurationMs = step.EffectCycleDurationMs ?? 0,
                     FadeSteps = step.FadeSteps ?? 0,
+                    Continuous = step.Continuous,
                 });
             }
             _suppressJump = false;
@@ -935,6 +938,7 @@ public partial class SequencePanelViewModel : ObservableObject
                 EffectType = e.EffectType,
                 EffectCycleDurationMs = e.EffectCycleDurationMs > 0 ? e.EffectCycleDurationMs : null,
                 FadeSteps = e.FadeSteps > 0 ? e.FadeSteps : null,
+                Continuous = e.Continuous,
             }).ToList()
         };
 
@@ -968,6 +972,7 @@ public partial class SequencePanelViewModel : ObservableObject
                 EffectType = step.EffectType,
                 EffectCycleDurationMs = step.EffectCycleDurationMs ?? 0,
                 FadeSteps = step.FadeSteps ?? 0,
+                Continuous = step.Continuous,
             });
         }
         _suppressJump = false;
@@ -988,6 +993,7 @@ public partial class StepEditItem : ObservableObject
     [ObservableProperty] private EffectType? _effectType;
     [ObservableProperty] private int _effectCycleDurationMs;
     [ObservableProperty] private int _fadeSteps;
+    [ObservableProperty] private bool _continuous = true;
     [ObservableProperty] private bool _isHighlighted;
     [ObservableProperty] private bool _isPendingInsert;
 
