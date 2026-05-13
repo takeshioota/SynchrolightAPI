@@ -282,14 +282,26 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- 送信ボタン -->
-                    <Button Command="{Binding SendCommand}" Style="{StaticResource ActionButton}"
-                            HorizontalAlignment="Stretch" FontSize="15">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#x1F680;" Margin="0,0,8,0" FontSize="16"/>
-                            <TextBlock Text="&#x9001;&#x4FE1;"/>
-                        </StackPanel>
-                    </Button>
+                    <!-- 送信/停止ボタン -->
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="8"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Command="{Binding SendCommand}" Style="{StaticResource ActionButton}" FontSize="15">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#x1F680;" Margin="0,0,8,0" FontSize="16"/>
+                                <TextBlock Text="&#x9001;&#x4FE1;"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Grid.Column="2" Command="{Binding StopSendCommand}" Style="{StaticResource DangerButton}" FontSize="15">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#x25A0;" Margin="0,0,6,0"/>
+                                <TextBlock Text="&#x505C;&#x6B62;"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
                 </StackPanel>
 
                 <!-- ===== エフェクトモード ===== -->

@@ -292,6 +292,15 @@ public partial class CommandPanelViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private async Task StopSendAsync()
+    {
+        if (_apiClient != null)
+        {
+            await _apiClient.StopEffectAsync();
+        }
+    }
+
+    [RelayCommand]
     private void SetPresetColor(string preset)
     {
         var rgb = preset switch
@@ -344,13 +353,15 @@ public partial class CommandPanelViewModel : ObservableObject
     [RelayCommand]
     private async Task StopEffectAsync()
     {
+        // デバウンスによるエフェクト再起動を防止
+        _colorDebounceCts?.Cancel();
+        _isEffectRunning = false;
+
         if (_apiClient != null)
         {
             await _apiClient.StopEffectAsync();
-            await _apiClient.AllOffAsync();
         }
 
-        _isEffectRunning = false;
         EffectStatus = "";
     }
 

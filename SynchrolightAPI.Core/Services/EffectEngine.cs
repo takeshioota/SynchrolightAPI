@@ -68,6 +68,7 @@ public class EffectEngine
 
     /// <summary>
     /// エフェクトを実行する。CancellationToken でキャンセルするまで継続（Continuous=true時）。
+    /// 非連続（Continuous=false）の場合、エフェクト完了後に最終色を自動的に連続送信する。
     /// 内部で EffectScheduler.BeginEffect を呼び、前エフェクトを自動中断する。
     /// </summary>
     public async Task RunAsync(EffectParams p, CancellationToken ct)
@@ -97,6 +98,12 @@ public class EffectEngine
                     await RunSevenColorAsync(p, effectCt);
                     break;
             }
+
+            // エフェクトが正常完了（キャンセルではなく自然終了）した場合、
+            // 最終色を連続送信してデバイスのセルフモード突入を防止する。
+            var finalColor = GetFinalColor(p);
+            _logger.LogInformation("エフェクト完了 → 最終色保持: ({R},{G},{B})", finalColor.R, finalColor.G, finalColor.B);
+            await _scheduler.ContinuousSendWithoutResetAsync(p.Field, finalColor, effectCt);
         }
         catch (OperationCanceledException)
         {
@@ -104,16 +111,25 @@ public class EffectEngine
         }
     }
 
+    /// <summary>エフェクト完了後に保持すべき最終色を決定する。</summary>
+    private static Rgb GetFinalColor(EffectParams p) => p.Type switch
+    {
+        EffectType.FadeIn => p.Color,       // 黒→色 → 色を保持
+        EffectType.FadeOut => Rgb.Black,     // 色→黒 → 黒を保持
+        EffectType.Flash => Rgb.Black,       // ON/OFF → 黒を保持
+        EffectType.Breathing => Rgb.Black,   // 吸→吐 → 黒を保持
+        EffectType.SevenColor => Rgb.White,  // 最後の色(白)を保持
+        _ => Rgb.Black,
+    };
+
     private async Task RunFlashAsync(EffectParams p, CancellationToken effectCt)
     {
-        var interval = p.FlashInterval ?? TimeSpan.FromMilliseconds(500);
+        var interval = p.FlashInterval ?? TimeSpan.FromMilliseconds(250);
 
         do
         {
-            await _scheduler.SendFrameAsync(p.Field, p.Color, effectCt);
-            await Task.Delay(interval, effectCt);
-            await _scheduler.SendFrameAsync(p.Field, Rgb.Black, effectCt);
-            await Task.Delay(interval, effectCt);
+            await _scheduler.SendFrameForDurationAsync(p.Field, p.Color, interval, effectCt);
+            await _scheduler.SendFrameForDurationAsync(p.Field, Rgb.Black, interval, effectCt);
         } while (p.Continuous && !effectCt.IsCancellationRequested);
     }
 

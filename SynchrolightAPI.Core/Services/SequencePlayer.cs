@@ -125,31 +125,39 @@ public class SequencePlayer
         switch (step.CommandType)
         {
             case SequenceCommandType.Color:
-                _scheduler.Abort();
-                var packet = LightProtocol.BuildA2_GlobalColor(step.Field, step.R, step.G, step.B);
-                await _transport.EnqueueAsync(packet, options, ct);
-                _logger.LogDebug("SEQ: Color ({R},{G},{B}) at {Time}ms", step.R, step.G, step.B, step.TimeOffsetMs);
+                {
+                    var color = new Rgb(step.R, step.G, step.B);
+                    // BeginEffect で前操作を停止し、SendFrameAsync で最初のパケット送信を保証。
+                    // その後 fire-and-forget で連続送信を開始する。
+                    var effectCt = _scheduler.BeginEffect(ct);
+                    await _scheduler.SendFrameAsync(step.Field, color, effectCt);
+                    _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, color, effectCt);
+                    _logger.LogDebug("SEQ: Color ({R},{G},{B}) at {Time}ms", step.R, step.G, step.B, step.TimeOffsetMs);
+                }
                 break;
 
             case SequenceCommandType.Off:
-                _scheduler.Abort();
-                var offPacket = LightProtocol.BuildA2_GlobalColor(step.Field, 0, 0, 0);
-                await _transport.EnqueueAsync(offPacket, options, ct);
-                _logger.LogDebug("SEQ: Off at {Time}ms", step.TimeOffsetMs);
+                {
+                    var effectCt = _scheduler.BeginEffect(ct);
+                    await _scheduler.SendFrameAsync(step.Field, Rgb.Black, effectCt);
+                    _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, Rgb.Black, effectCt);
+                    _logger.LogDebug("SEQ: Off at {Time}ms", step.TimeOffsetMs);
+                }
                 break;
 
             case SequenceCommandType.Effect:
                 if (step.EffectType.HasValue)
                 {
-                    // 前エフェクトを確実に停止してから新エフェクトを開始
-                    _scheduler.Abort();
-
+                    // RunAsync 内で BeginEffect が呼ばれ、前操作を自動停止する
                     var effectParams = new EffectParams(
                         Type: step.EffectType.Value,
                         Color: new Rgb(step.R, step.G, step.B),
                         Field: step.Field,
                         CycleDuration: step.EffectCycleDurationMs.HasValue
                             ? TimeSpan.FromMilliseconds(step.EffectCycleDurationMs.Value)
+                            : null,
+                        FlashInterval: step.EffectType.Value == EffectType.Flash && step.EffectCycleDurationMs.HasValue
+                            ? TimeSpan.FromMilliseconds(step.EffectCycleDurationMs.Value / 2)
                             : null,
                         FadeSteps: step.FadeSteps ?? 20,
                         Continuous: true

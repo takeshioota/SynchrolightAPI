@@ -351,15 +351,18 @@ public partial class SequencePanelViewModel : ObservableObject
         _editorPollCts?.Dispose();
         _editorPollCts = null;
 
-        if (IsPlayingInline)
+        try
         {
+            // シーケンス・エフェクト・カラーホールドをすべて停止
             await _apiClient.StopSequenceAsync();
-            Status = "停止しました";
+            await _apiClient.StopEffectAsync();
         }
+        catch (HttpRequestException) { }
 
         IsPlayingInline = false;
         _isJumping = false;
         ClearHighlight();
+        Status = "停止しました";
     }
 
     // --- ジャンプ: 連続再生中にステップをクリックするとそこから再生再開 ---

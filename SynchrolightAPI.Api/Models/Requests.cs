@@ -7,7 +7,7 @@ public record ConnectRequest(string[] PortNames);
 public record TransmitterInitRequest(int Channel, int Power);
 
 // --- Light ---
-public record GlobalColorRequest(ColorValue Color);
+public record GlobalColorRequest(ColorValue Color, int? Field = null);
 
 public record RowsRequest(int Field, int StartRow, int RowLen, ColorValue Color);
 

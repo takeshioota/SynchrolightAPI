@@ -104,7 +104,7 @@ public class SynchrolightApiClient
 
     public async Task<bool> SetGlobalColorAsync(int field, byte r, byte g, byte b)
     {
-        var body = new { color = new { r, g, b } };
+        var body = new { color = new { r, g, b }, field };
         var resp = await _http.PostAsJsonAsync("api/light/global", body, JsonOptions);
         return resp.IsSuccessStatusCode;
     }
