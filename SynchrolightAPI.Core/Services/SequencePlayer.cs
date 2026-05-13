@@ -160,7 +160,7 @@ public class SequencePlayer
                             ? TimeSpan.FromMilliseconds(step.EffectCycleDurationMs.Value / 2)
                             : null,
                         FadeSteps: step.FadeSteps ?? 20,
-                        Continuous: true
+                        Continuous: step.Continuous
                     );
                     // エフェクトをバックグラウンドで実行（次のステップに進む）
                     _ = _effectEngine.RunAsync(effectParams, ct);
