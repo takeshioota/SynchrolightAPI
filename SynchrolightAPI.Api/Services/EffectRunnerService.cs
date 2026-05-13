@@ -85,6 +85,86 @@ public class EffectRunnerService
         _logger.LogInformation("API: エフェクト開始 {Type}", p.Type);
     }
 
+    /// <summary>指定色を連続送信する。実行中のエフェクト/シーケンスは自動停止。</summary>
+    public void StartColorHold(byte field, Rgb color)
+    {
+        lock (_lock)
+        {
+            StopSequenceInternal();
+            StopEffectInternal();
+
+            var cts = new CancellationTokenSource();
+            _effectCts = cts;
+            _currentEffect = null;
+
+            _effectTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await _scheduler.SendContinuousColorAsync(field, color, cts.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "カラーホールドタスク異常終了");
+                }
+                finally
+                {
+                    lock (_lock)
+                    {
+                        if (_effectCts == cts)
+                        {
+                            _currentEffect = null;
+                            _effectTask = null;
+                        }
+                    }
+                }
+            });
+        }
+
+        _logger.LogInformation("API: カラーホールド開始 ({R},{G},{B})", color.R, color.G, color.B);
+    }
+
+    /// <summary>任意パケットを連続送信する。実行中のエフェクト/シーケンスは自動停止。</summary>
+    public void StartPacketHold(byte[] packet)
+    {
+        lock (_lock)
+        {
+            StopSequenceInternal();
+            StopEffectInternal();
+
+            var cts = new CancellationTokenSource();
+            _effectCts = cts;
+            _currentEffect = null;
+
+            _effectTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await _scheduler.SendContinuousPacketAsync(packet, cts.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "パケットホールドタスク異常終了");
+                }
+                finally
+                {
+                    lock (_lock)
+                    {
+                        if (_effectCts == cts)
+                        {
+                            _currentEffect = null;
+                            _effectTask = null;
+                        }
+                    }
+                }
+            });
+        }
+
+        _logger.LogInformation("API: パケットホールド開始");
+    }
+
     /// <summary>実行中のエフェクトを停止する。</summary>
     public void StopEffect()
     {
@@ -192,16 +272,8 @@ public class EffectRunnerService
     }
 
     /// <summary>単一ステップを即時実行する（ステップ再生）。</summary>
-    public async Task PlaySingleStepAsync(SequenceStep step)
+    public Task PlaySingleStepAsync(SequenceStep step)
     {
-        lock (_lock)
-        {
-            StopEffectInternal();
-            StopSequenceInternal();
-            _inlineSequence = null;
-        }
-
-        // Effect型はStartEffect経由でライフサイクル管理する
         if (step.CommandType == SequenceCommandType.Effect && step.EffectType.HasValue)
         {
             var effectParams = new EffectParams(
@@ -211,6 +283,9 @@ public class EffectRunnerService
                 CycleDuration: step.EffectCycleDurationMs.HasValue
                     ? TimeSpan.FromMilliseconds(step.EffectCycleDurationMs.Value)
                     : null,
+                FlashInterval: step.EffectType.Value == EffectType.Flash && step.EffectCycleDurationMs.HasValue
+                    ? TimeSpan.FromMilliseconds(step.EffectCycleDurationMs.Value / 2)
+                    : null,
                 FadeSteps: step.FadeSteps ?? 20,
                 Continuous: true
             );
@@ -218,14 +293,23 @@ public class EffectRunnerService
         }
         else if (step.CommandType == SequenceCommandType.EffectStop)
         {
-            // 既にStopEffectInternalで停止済み
+            lock (_lock)
+            {
+                StopEffectInternal();
+                StopSequenceInternal();
+                _inlineSequence = null;
+            }
             _logger.LogDebug("ステップ再生: EffectStop");
         }
-        else
+        else if (step.CommandType is SequenceCommandType.Color or SequenceCommandType.Off)
         {
-            // Color, Off: SequencePlayer経由で直接実行
-            await _sequencePlayer.ExecuteStepAsync(step, CancellationToken.None);
+            var color = step.CommandType == SequenceCommandType.Off
+                ? Rgb.Black
+                : new Rgb(step.R, step.G, step.B);
+            StartColorHold(step.Field, color);
         }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>再生中にジャンプする。</summary>

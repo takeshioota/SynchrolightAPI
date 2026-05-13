@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using SynchrolightAPI.Domain;
 using SynchrolightAPI.Protocol;
@@ -12,6 +13,12 @@ namespace SynchrolightAPI.Services;
 /// </summary>
 public class EffectScheduler
 {
+    /// <summary>
+    /// 連続送信間隔（ms）。デバイスの 200ms タイムアウトに対して十分な余裕を持たせた値。
+    /// 20ms 間隔 = 1秒あたり50回送信。確実にセルフモード突入を防止する。
+    /// </summary>
+    private const int ContinuousSendIntervalMs = 20;
+
     private readonly ITransport _transport;
     private readonly InterpolationService _interpolation;
     private readonly ILogger<EffectScheduler> _logger;
@@ -42,6 +49,7 @@ public class EffectScheduler
     /// <summary>
     /// 補間セグメントを送信する（BeginEffect 後に使用）。
     /// from→to を stepCount ステップで duration かけて送信する。
+    /// 各ステップの保持期間中も 150ms 間隔で連続送信し、デバイスのセルフモード突入を防止する。
     /// BeginOperation は呼ばないため、同一エフェクト内の連続セグメントで
     /// 不要なキューフラッシュが発生しない。
     /// </summary>
@@ -55,9 +63,7 @@ public class EffectScheduler
         foreach (var rgb in steps)
         {
             effectCt.ThrowIfCancellationRequested();
-            var packet = LightProtocol.BuildA2_GlobalColor(field, rgb.R, rgb.G, rgb.B);
-            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
-            await Task.Delay(interval, effectCt);
+            await SendFrameForDurationAsync(field, rgb, interval, effectCt);
         }
     }
 
@@ -70,6 +76,78 @@ public class EffectScheduler
         effectCt.ThrowIfCancellationRequested();
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
         await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+    }
+
+    /// <summary>
+    /// 指定色を指定時間連続送信する（BeginEffect 後に使用）。
+    /// holdDuration の間、ContinuousSendIntervalMs 間隔でパケットを送信し続ける。
+    /// Flash の ON/OFF フェーズや補間ステップの保持に使用する。
+    /// </summary>
+    public async Task SendFrameForDurationAsync(
+        byte field, Rgb color, TimeSpan holdDuration, CancellationToken effectCt)
+    {
+        var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed < holdDuration)
+        {
+            effectCt.ThrowIfCancellationRequested();
+            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+            var remainingMs = (holdDuration - sw.Elapsed).TotalMilliseconds;
+            var delayMs = (int)Math.Min(ContinuousSendIntervalMs, Math.Max(0, remainingMs));
+            if (delayMs > 0)
+                await Task.Delay(delayMs, effectCt);
+        }
+    }
+
+    /// <summary>
+    /// 指定色を連続的に再送信する。BeginEffect で新しい操作を開始し、
+    /// キャンセルされるまで ~150ms 間隔で A2 パケットを送信し続ける。
+    /// デバイスのセルフモード突入（200ms タイムアウト）を防止する。
+    /// </summary>
+    public async Task SendContinuousColorAsync(byte field, Rgb color, CancellationToken outerCt)
+    {
+        _logger.LogDebug("SendContinuousColorAsync: 連続カラー送信開始 ({R},{G},{B})", color.R, color.G, color.B);
+        var effectCt = BeginEffect(outerCt);
+
+        var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
+        while (!effectCt.IsCancellationRequested)
+        {
+            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+            await Task.Delay(ContinuousSendIntervalMs, effectCt);
+        }
+    }
+
+    /// <summary>
+    /// BeginEffect 済みの CancellationToken を使用して連続カラー送信する。
+    /// SequencePlayer から使用：既に BeginEffect で前操作を停止済みの場合に、
+    /// 再度リセット＋FlushQueue を発生させずに連続送信を開始する。
+    /// </summary>
+    public async Task ContinuousSendWithoutResetAsync(
+        byte field, Rgb color, CancellationToken effectCt)
+    {
+        var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
+        while (!effectCt.IsCancellationRequested)
+        {
+            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+            await Task.Delay(ContinuousSendIntervalMs, effectCt);
+        }
+    }
+
+    /// <summary>
+    /// 任意の事前ビルド済みパケットを連続送信する。BeginEffect で新しい操作を開始し、
+    /// キャンセルされるまで ~150ms 間隔で送信し続ける。
+    /// グループ指定（AA コマンド等）の連続送信に使用する。
+    /// </summary>
+    public async Task SendContinuousPacketAsync(byte[] packet, CancellationToken outerCt)
+    {
+        _logger.LogDebug("SendContinuousPacketAsync: 連続パケット送信開始");
+        var effectCt = BeginEffect(outerCt);
+
+        while (!effectCt.IsCancellationRequested)
+        {
+            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+            await Task.Delay(ContinuousSendIntervalMs, effectCt);
+        }
     }
 
     /// <summary>
