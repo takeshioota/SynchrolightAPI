@@ -82,7 +82,6 @@ public class SequencePlayer
                 {
                     ct.ThrowIfCancellationRequested();
 
-                    CurrentStepIndex = i;
                     var step = sortedSteps[i];
 
                     // 指定時刻まで待機（基準時刻からの相対）
@@ -92,6 +91,10 @@ public class SequencePlayer
                         await Task.Delay(waitMs, ct);
                     }
 
+                    // ステップを実行する直前に CurrentStepIndex を更新する。
+                    // 待機前に更新すると、現在実行中のステップではなく次に実行予定のステップを
+                    // 指してしまい、UI のハイライト表示が実機の点灯より先行する現象が発生する。
+                    CurrentStepIndex = i;
                     await ExecuteStepAsync(step, ct);
                 }
 
@@ -99,6 +102,10 @@ public class SequencePlayer
                 startFromIndex = 0;
 
             } while (loop && !ct.IsCancellationRequested);
+
+            // 最終ステップを UI 側ポーリング（既定 200ms 間隔）が確実に検出できるよう、
+            // 完了状態への遷移前に短時間待機する。
+            await Task.Delay(300, ct);
 
             _logger.LogInformation("シーケンス再生完了: {Name}", sequence.Name);
         }

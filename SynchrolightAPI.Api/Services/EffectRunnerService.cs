@@ -30,6 +30,11 @@ public class EffectRunnerService
     // Inline sequence state (ジャンプ用に保持)
     private Sequence? _inlineSequence;
 
+    // Paused sequence state (割り込み点灯からの再開用)
+    private string? _pausedSequenceName;
+    private Sequence? _pausedInlineSequence;
+    private int _pausedStepIndex = -1;
+
 
     public EffectRunnerService(
         EffectEngine effectEngine,
@@ -185,8 +190,10 @@ public class EffectRunnerService
     }
 
     /// <summary>シーケンスを開始する。実行中のエフェクト/シーケンスは自動停止。</summary>
+    /// <param name="name">保存済みシーケンス名</param>
+    /// <param name="startFromIndex">再生開始ステップインデックス（既定 0）</param>
     /// <returns>シーケンスが見つからない場合 false</returns>
-    public bool StartSequence(string name)
+    public bool StartSequence(string name, int startFromIndex = 0)
     {
         var sequence = _sequenceStore.Load(name);
         if (sequence == null) return false;
@@ -196,6 +203,7 @@ public class EffectRunnerService
             StopEffectInternal();
             StopSequenceInternal();
             _inlineSequence = null;
+            ClearPausedStateInternal();
 
             var cts = new CancellationTokenSource();
             _sequenceCts = cts;
@@ -205,7 +213,7 @@ public class EffectRunnerService
             {
                 try
                 {
-                    await _sequencePlayer.PlayAsync(sequence, cts.Token);
+                    await _sequencePlayer.PlayAsync(sequence, cts.Token, startFromIndex);
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
@@ -226,8 +234,75 @@ public class EffectRunnerService
             });
         }
 
-        _logger.LogInformation("API: シーケンス再生開始 {Name}", name);
+        _logger.LogInformation("API: シーケンス再生開始 {Name} (開始ステップ={Start})", name, startFromIndex);
         return true;
+    }
+
+    /// <summary>
+    /// 実行中のシーケンスを一時停止する。停止位置（ステップインデックスとシーケンス参照）を
+    /// 内部に保存して、後続の ResumeSequence で続きから再開できるようにする。
+    /// </summary>
+    /// <returns>一時停止できた場合 true、再生中シーケンスがない場合 false</returns>
+    public bool PauseSequence()
+    {
+        lock (_lock)
+        {
+            if (_sequenceTask == null || _sequenceTask.IsCompleted)
+            {
+                return false;
+            }
+
+            // 現在の状態を保存
+            _pausedSequenceName = _currentSequenceName;
+            _pausedInlineSequence = _inlineSequence;
+            _pausedStepIndex = _sequencePlayer.CurrentStepIndex;
+
+            // 再生を停止（保存した状態は残る）
+            StopSequenceInternal();
+        }
+
+        _logger.LogInformation("API: シーケンス一時停止 (step={Index})", _pausedStepIndex);
+        return true;
+    }
+
+    /// <summary>
+    /// PauseSequence で保存した位置からシーケンス再生を再開する。
+    /// 再開対象がない場合は false を返す。
+    /// </summary>
+    public bool ResumeSequence()
+    {
+        string? name;
+        Sequence? inlineSeq;
+        int startIdx;
+
+        lock (_lock)
+        {
+            name = _pausedSequenceName;
+            inlineSeq = _pausedInlineSequence;
+            startIdx = Math.Max(0, _pausedStepIndex);
+
+            _pausedSequenceName = null;
+            _pausedInlineSequence = null;
+            _pausedStepIndex = -1;
+        }
+
+        if (name != null)
+        {
+            var ok = StartSequence(name, startIdx);
+            if (ok)
+            {
+                _logger.LogInformation("API: シーケンス再開 {Name} (step={Index})", name, startIdx);
+            }
+            return ok;
+        }
+        if (inlineSeq != null)
+        {
+            StartSequenceInline(inlineSeq, startIdx);
+            _logger.LogInformation("API: インラインシーケンス再開 (step={Index})", startIdx);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>エディタ内容をインライン再生する（連続再生）。</summary>
@@ -240,6 +315,7 @@ public class EffectRunnerService
 
             _inlineSequence = sequence;
             _currentSequenceName = null;
+            ClearPausedStateInternal();
 
             var cts = new CancellationTokenSource();
             _sequenceCts = cts;
@@ -337,6 +413,7 @@ public class EffectRunnerService
         {
             StopSequenceInternal();
             _inlineSequence = null;
+            ClearPausedStateInternal();
         }
     }
 
@@ -381,5 +458,12 @@ public class EffectRunnerService
         _sequencePlayer.FlushAndStop();
         _currentSequenceName = null;
         _sequenceTask = null;
+    }
+
+    private void ClearPausedStateInternal()
+    {
+        _pausedSequenceName = null;
+        _pausedInlineSequence = null;
+        _pausedStepIndex = -1;
     }
 }

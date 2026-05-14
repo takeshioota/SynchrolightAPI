@@ -117,6 +117,26 @@ public class SequenceController(EffectRunnerService runner, SequenceStore store,
         return Ok(new ApiResponse(true, Message: $"Jumped to step {req.StepIndex}"));
     }
 
+    // POST /api/sequence/play/pause — シーケンスを一時停止（状態保存）
+    [HttpPost("play/pause")]
+    public IActionResult PlayPause()
+    {
+        if (!runner.PauseSequence())
+            return Ok(new ApiResponse(false, Error: "No sequence is currently playing"));
+
+        return Ok(new ApiResponse(true, Message: "Sequence paused"));
+    }
+
+    // POST /api/sequence/play/resume — 一時停止していた位置からシーケンスを再開
+    [HttpPost("play/resume")]
+    public IActionResult PlayResume()
+    {
+        if (!runner.ResumeSequence())
+            return Ok(new ApiResponse(false, Error: "No paused sequence to resume"));
+
+        return Ok(new ApiResponse(true, Message: "Sequence resumed"));
+    }
+
     // GET /api/sequence/play/status — 再生状態取得
     [HttpGet("play/status")]
     public IActionResult PlayStatus()
