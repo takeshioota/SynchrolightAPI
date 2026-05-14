@@ -1,7 +1,9 @@
 <UserControl x:Class="SynchrolightAPI.Wpf.Views.SequencePanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:conv="clr-namespace:SynchrolightAPI.Wpf.Converters">
+             xmlns:conv="clr-namespace:SynchrolightAPI.Wpf.Converters"
+             Focusable="True"
+             PreviewKeyDown="UserControl_PreviewKeyDown">
     <UserControl.Resources>
         <conv:RgbToBrushConverter x:Key="RgbToBrush"/>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
@@ -145,8 +147,12 @@
                         <TextBlock Text="テンプレ:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="Bold"/>
                         <Button Content="色変更" Command="{Binding AddTemplateColorCommand}"
                                 Padding="6,2" Margin="0,0,2,2" Background="#FFECEC" ToolTip="単色ステップを追加"/>
+                        <Button Content="FadeIn" Command="{Binding AddTemplateFadeInCommand}"
+                                Padding="6,2" Margin="0,0,2,2" Background="#E0F7FA" ToolTip="FadeIn(1回) 黒→色 3秒 完了後保持"/>
+                        <Button Content="FadeOut" Command="{Binding AddTemplateFadeOutCommand}"
+                                Padding="6,2" Margin="0,0,2,2" Background="#FDE0DC" ToolTip="FadeOut(1回) 色→黒 3秒 完了後保持"/>
                         <Button Content="呼吸" Command="{Binding AddTemplateFadeInOutCommand}"
-                                Padding="6,2" Margin="0,0,2,2" Background="#ECFFEC" ToolTip="Breathing開始+5秒後停止"/>
+                                Padding="6,2" Margin="0,0,2,2" Background="#ECFFEC" ToolTip="Breathing(繰返) FadeIn+FadeOut+5秒後停止"/>
                         <Button Content="Flash" Command="{Binding AddTemplateFlashCommand}"
                                 Padding="6,2" Margin="0,0,2,2" Background="#ECECFF" ToolTip="Flash開始+3秒後停止"/>
                         <Button Content="7色" Command="{Binding AddTemplateSevenColorCommand}"
@@ -188,6 +194,55 @@
                                 Padding="6,2" Margin="0,0,2,2" Foreground="Red"
                                 Visibility="{Binding IsPlayingInline, Converter={StaticResource BoolToVis}}"
                                 ToolTip="エディタ再生を停止"/>
+                    </WrapPanel>
+
+                    <!-- ツールバー: 煽りボタン（割り込み点灯） -->
+                    <WrapPanel Margin="0,2,0,2">
+                        <TextBlock Text="煽り:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="Bold"/>
+
+                        <!-- 煽り1: カラープレビュー -->
+                        <Border Width="18" Height="18" CornerRadius="3" Margin="0,0,2,2"
+                                BorderBrush="#888" BorderThickness="1" VerticalAlignment="Center"
+                                Background="{Binding Hype1Brush}" Cursor="Hand"
+                                MouseLeftButtonDown="Hype1Color_Click"
+                                ToolTip="ダブルクリックで色変更"/>
+                        <!-- 煽り1: ボタン -->
+                        <Button x:Name="HypeBtn1" Content="煽り1" Padding="10,4" Margin="0,0,2,2"
+                                FontWeight="Bold" FontSize="13" Background="#FFE0E0"
+                                PreviewMouseLeftButtonDown="Hype1_MouseDown"
+                                PreviewMouseLeftButtonUp="Hype1_MouseUp"
+                                ToolTip="押す→点灯 / 離す→復帰"/>
+                        <!-- 煽り1: プリセット色 -->
+                        <Button Content="R" Padding="4,2" Margin="0,0,1,2" FontSize="10" Foreground="White" Background="#EF4444"
+                                Click="Hype1Preset_Red"/>
+                        <Button Content="G" Padding="4,2" Margin="0,0,1,2" FontSize="10" Foreground="White" Background="#22C55E"
+                                Click="Hype1Preset_Green"/>
+                        <Button Content="B" Padding="4,2" Margin="0,0,1,2" FontSize="10" Foreground="White" Background="#3B82F6"
+                                Click="Hype1Preset_Blue"/>
+                        <Button Content="W" Padding="4,2" Margin="0,0,8,2" FontSize="10" Background="#F3F4F6"
+                                Click="Hype1Preset_White"/>
+
+                        <!-- 煽り2: カラープレビュー -->
+                        <Border Width="18" Height="18" CornerRadius="3" Margin="0,0,2,2"
+                                BorderBrush="#888" BorderThickness="1" VerticalAlignment="Center"
+                                Background="{Binding Hype2Brush}" Cursor="Hand"
+                                MouseLeftButtonDown="Hype2Color_Click"
+                                ToolTip="ダブルクリックで色変更"/>
+                        <!-- 煽り2: ボタン -->
+                        <Button x:Name="HypeBtn2" Content="煽り2" Padding="10,4" Margin="0,0,2,2"
+                                FontWeight="Bold" FontSize="13" Background="#E0E0FF"
+                                PreviewMouseLeftButtonDown="Hype2_MouseDown"
+                                PreviewMouseLeftButtonUp="Hype2_MouseUp"
+                                ToolTip="押す→点灯 / 離す→復帰"/>
+                        <!-- 煽り2: プリセット色 -->
+                        <Button Content="R" Padding="4,2" Margin="0,0,1,2" FontSize="10" Foreground="White" Background="#EF4444"
+                                Click="Hype2Preset_Red"/>
+                        <Button Content="G" Padding="4,2" Margin="0,0,1,2" FontSize="10" Foreground="White" Background="#22C55E"
+                                Click="Hype2Preset_Green"/>
+                        <Button Content="B" Padding="4,2" Margin="0,0,1,2" FontSize="10" Foreground="White" Background="#3B82F6"
+                                Click="Hype2Preset_Blue"/>
+                        <Button Content="W" Padding="4,2" Margin="0,0,2,2" FontSize="10" Background="#F3F4F6"
+                                Click="Hype2Preset_White"/>
                     </WrapPanel>
 
                     <Separator Margin="0,2,0,0"/>
@@ -302,8 +357,34 @@
                         <!-- Fadeステップ -->
                         <DataGridTextColumn Header="Fade" Binding="{Binding FadeSteps}" Width="40"/>
 
-                        <!-- 連続再生 -->
-                        <DataGridCheckBoxColumn Header="連続" Binding="{Binding Continuous}" Width="35"/>
+                        <!-- 連続/1回 -->
+                        <DataGridTemplateColumn Header="繰返" Width="40">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock HorizontalAlignment="Center" FontSize="11">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="繰返"/>
+                                                <Setter Property="Foreground" Value="Gray"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Continuous}" Value="False">
+                                                        <Setter Property="Text" Value="1回"/>
+                                                        <Setter Property="Foreground" Value="#E65100"/>
+                                                        <Setter Property="FontWeight" Value="Bold"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                            <DataGridTemplateColumn.CellEditingTemplate>
+                                <DataTemplate>
+                                    <CheckBox IsChecked="{Binding Continuous, UpdateSourceTrigger=PropertyChanged}"
+                                              HorizontalAlignment="Center"/>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellEditingTemplate>
+                        </DataGridTemplateColumn>
 
                         <!-- 削除ボタン -->
                         <DataGridTemplateColumn Header="" Width="32">

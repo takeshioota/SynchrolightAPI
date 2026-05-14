@@ -317,6 +317,19 @@ public class SynchrolightApiClient
         var resp = await _http.PostAsJsonAsync("api/sequence/play/jump", body, JsonOptions);
         return resp.IsSuccessStatusCode;
     }
+
+    public async Task<bool> PauseSequenceAsync()
+    {
+        var resp = await _http.PostAsync("api/sequence/play/pause", null);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> ResumeSequenceAsync()
+    {
+        var resp = await _http.PostAsync("api/sequence/play/resume", null);
+        return resp.IsSuccessStatusCode;
+    }
+
     // =========================================================
     //  Sequence Recording
     // =========================================================
