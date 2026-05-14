@@ -45,14 +45,49 @@ public class SequencePlayer
     /// <summary>再生中のシーケンスの総ステップ数</summary>
     public int TotalStepCount { get; private set; }
 
+    // 現在のステップが「発火した時点での Stopwatch.ElapsedMilliseconds」を記録する。
+    // この値と現在の Stopwatch.ElapsedMilliseconds の差分が「現ステップに入ってからの経過時間」になる。
+    // ただし、ジャンプや一時停止からの再開時に初期経過時間（initialElapsedMsInStartStep）が
+    // ある場合は、それも加算する必要があるため _initialElapsedOffsetMs に保持しておく。
+    private Stopwatch? _runningSw;
+    private int _currentStepFiredAtSwMs = -1;
+    private int _initialElapsedOffsetMs;
+
+    /// <summary>
+    /// 現在実行中ステップに入ってからの経過ミリ秒。
+    /// 一時停止時に「次回再開のために現ステップで何ミリ秒進んでいたか」を取得するために使用する。
+    /// 再生中でない場合は 0 を返す。
+    /// </summary>
+    public int CurrentStepElapsedMs
+    {
+        get
+        {
+            var sw = _runningSw;
+            if (sw == null || _currentStepFiredAtSwMs < 0) return 0;
+            // 現ステップ発火後の経過 + 開始ステップに入ったときの初期オフセット
+            var elapsed = (int)sw.ElapsedMilliseconds - _currentStepFiredAtSwMs;
+            // 最初のステップでは「ジャンプ/再開時の初期経過」も加算する
+            if (CurrentStepIndex == _startFromIndexInRun)
+            {
+                elapsed += _initialElapsedOffsetMs;
+            }
+            return Math.Max(0, elapsed);
+        }
+    }
+
+    // PlayAsync が現在の run で受け取った startFromIndex を保持する
+    private int _startFromIndexInRun;
+
     /// <summary>
     /// シーケンスを再生する。CancellationToken でキャンセルするまで実行。
     /// </summary>
     /// <param name="sequence">再生するシーケンス</param>
     /// <param name="ct">キャンセルトークン</param>
     /// <param name="startFromIndex">再生開始ステップインデックス（ソート後の順序）</param>
+    /// <param name="loop">ループ再生するかどうか</param>
+    /// <param name="initialElapsedMsInStartStep">開始ステップでの初期経過時間（再開時のステップ途中位置）</param>
     public async Task PlayAsync(Sequence sequence, CancellationToken ct,
-        int startFromIndex = 0, bool loop = false)
+        int startFromIndex = 0, bool loop = false, int initialElapsedMsInStartStep = 0)
     {
         if (sequence.Steps.Count == 0)
         {
@@ -64,19 +99,26 @@ public class SequencePlayer
         var sortedSteps = sequence.Steps.OrderBy(s => s.TimeOffsetMs).ToList();
         TotalStepCount = sortedSteps.Count;
         CurrentStepIndex = startFromIndex;
+        _startFromIndexInRun = startFromIndex;
+        _initialElapsedOffsetMs = Math.Max(0, initialElapsedMsInStartStep);
 
-        _logger.LogInformation("シーケンス再生開始: {Name} ({StepCount}ステップ, 開始={Start}, ループ={Loop})",
-            sequence.Name, sortedSteps.Count, startFromIndex, loop);
+        _logger.LogInformation("シーケンス再生開始: {Name} ({StepCount}ステップ, 開始={Start}, 初期経過={Elapsed}ms, ループ={Loop})",
+            sequence.Name, sortedSteps.Count, startFromIndex, initialElapsedMsInStartStep, loop);
 
         try
         {
             do
             {
-                // ジャンプ対応: 開始ステップの時刻を基準とする
+                // ジャンプ/途中再開対応:
+                //   通常時      baseTimeMs = sortedSteps[startFromIndex].TimeOffsetMs
+                //   途中再開時 baseTimeMs = sortedSteps[startFromIndex].TimeOffsetMs + initialElapsedMsInStartStep
+                // とすることで、開始ステップは waitMs が負になり即時発火しつつ、
+                // 後続ステップは「初期経過時間を差し引いた残り時間」だけ待機して発火する。
                 var baseTimeMs = startFromIndex < sortedSteps.Count
-                    ? sortedSteps[startFromIndex].TimeOffsetMs
+                    ? sortedSteps[startFromIndex].TimeOffsetMs + initialElapsedMsInStartStep
                     : 0;
                 var sw = Stopwatch.StartNew();
+                _runningSw = sw;
 
                 for (int i = startFromIndex; i < sortedSteps.Count; i++)
                 {
@@ -95,11 +137,15 @@ public class SequencePlayer
                     // 待機前に更新すると、現在実行中のステップではなく次に実行予定のステップを
                     // 指してしまい、UI のハイライト表示が実機の点灯より先行する現象が発生する。
                     CurrentStepIndex = i;
+                    _currentStepFiredAtSwMs = (int)sw.ElapsedMilliseconds;
                     await ExecuteStepAsync(step, ct);
                 }
 
-                // ループ時は先頭に戻る（startFromIndexは初回のみ使用）
+                // ループ時は先頭に戻る（startFromIndexは初回のみ使用、initialElapsedMsもリセット）
                 startFromIndex = 0;
+                initialElapsedMsInStartStep = 0;
+                _startFromIndexInRun = 0;
+                _initialElapsedOffsetMs = 0;
 
             } while (loop && !ct.IsCancellationRequested);
 
@@ -119,6 +165,9 @@ public class SequencePlayer
             IsPlaying = false;
             CurrentStepIndex = -1;
             TotalStepCount = 0;
+            _runningSw = null;
+            _currentStepFiredAtSwMs = -1;
+            _initialElapsedOffsetMs = 0;
         }
     }
 
