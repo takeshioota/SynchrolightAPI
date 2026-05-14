@@ -34,6 +34,9 @@ public class EffectRunnerService
     private string? _pausedSequenceName;
     private Sequence? _pausedInlineSequence;
     private int _pausedStepIndex = -1;
+    // 一時停止時に「現ステップで既に経過していた時間（ms）」を保存して、
+    // 再開時にステップの途中位置から続きを再生できるようにする。
+    private int _pausedElapsedMsInStep;
 
 
     public EffectRunnerService(
@@ -192,8 +195,9 @@ public class EffectRunnerService
     /// <summary>シーケンスを開始する。実行中のエフェクト/シーケンスは自動停止。</summary>
     /// <param name="name">保存済みシーケンス名</param>
     /// <param name="startFromIndex">再生開始ステップインデックス（既定 0）</param>
+    /// <param name="initialElapsedMsInStartStep">開始ステップでの初期経過時間（途中再開用、既定 0）</param>
     /// <returns>シーケンスが見つからない場合 false</returns>
-    public bool StartSequence(string name, int startFromIndex = 0)
+    public bool StartSequence(string name, int startFromIndex = 0, int initialElapsedMsInStartStep = 0)
     {
         var sequence = _sequenceStore.Load(name);
         if (sequence == null) return false;
@@ -213,7 +217,7 @@ public class EffectRunnerService
             {
                 try
                 {
-                    await _sequencePlayer.PlayAsync(sequence, cts.Token, startFromIndex);
+                    await _sequencePlayer.PlayAsync(sequence, cts.Token, startFromIndex, loop: false, initialElapsedMsInStartStep);
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
@@ -234,13 +238,14 @@ public class EffectRunnerService
             });
         }
 
-        _logger.LogInformation("API: シーケンス再生開始 {Name} (開始ステップ={Start})", name, startFromIndex);
+        _logger.LogInformation("API: シーケンス再生開始 {Name} (開始ステップ={Start}, 初期経過={Elapsed}ms)",
+            name, startFromIndex, initialElapsedMsInStartStep);
         return true;
     }
 
     /// <summary>
-    /// 実行中のシーケンスを一時停止する。停止位置（ステップインデックスとシーケンス参照）を
-    /// 内部に保存して、後続の ResumeSequence で続きから再開できるようにする。
+    /// 実行中のシーケンスを一時停止する。停止位置（ステップインデックス・現ステップ内経過時間・
+    /// シーケンス参照）を内部に保存して、後続の ResumeSequence で続きから再開できるようにする。
     /// </summary>
     /// <returns>一時停止できた場合 true、再生中シーケンスがない場合 false</returns>
     public bool PauseSequence()
@@ -252,53 +257,60 @@ public class EffectRunnerService
                 return false;
             }
 
-            // 現在の状態を保存
+            // 現在の状態を保存（ステップ index と現ステップで経過した時間の両方）
             _pausedSequenceName = _currentSequenceName;
             _pausedInlineSequence = _inlineSequence;
             _pausedStepIndex = _sequencePlayer.CurrentStepIndex;
+            _pausedElapsedMsInStep = _sequencePlayer.CurrentStepElapsedMs;
 
             // 再生を停止（保存した状態は残る）
             StopSequenceInternal();
         }
 
-        _logger.LogInformation("API: シーケンス一時停止 (step={Index})", _pausedStepIndex);
+        _logger.LogInformation("API: シーケンス一時停止 (step={Index}, 経過={Elapsed}ms)",
+            _pausedStepIndex, _pausedElapsedMsInStep);
         return true;
     }
 
     /// <summary>
-    /// PauseSequence で保存した位置からシーケンス再生を再開する。
-    /// 再開対象がない場合は false を返す。
+    /// PauseSequence で保存した位置（ステップ index ＋ 現ステップ内経過時間）から
+    /// シーケンス再生を再開する。再開対象がない場合は false を返す。
     /// </summary>
     public bool ResumeSequence()
     {
         string? name;
         Sequence? inlineSeq;
         int startIdx;
+        int elapsedMs;
 
         lock (_lock)
         {
             name = _pausedSequenceName;
             inlineSeq = _pausedInlineSequence;
             startIdx = Math.Max(0, _pausedStepIndex);
+            elapsedMs = Math.Max(0, _pausedElapsedMsInStep);
 
             _pausedSequenceName = null;
             _pausedInlineSequence = null;
             _pausedStepIndex = -1;
+            _pausedElapsedMsInStep = 0;
         }
 
         if (name != null)
         {
-            var ok = StartSequence(name, startIdx);
+            var ok = StartSequence(name, startIdx, elapsedMs);
             if (ok)
             {
-                _logger.LogInformation("API: シーケンス再開 {Name} (step={Index})", name, startIdx);
+                _logger.LogInformation("API: シーケンス再開 {Name} (step={Index}, 経過={Elapsed}ms)",
+                    name, startIdx, elapsedMs);
             }
             return ok;
         }
         if (inlineSeq != null)
         {
-            StartSequenceInline(inlineSeq, startIdx);
-            _logger.LogInformation("API: インラインシーケンス再開 (step={Index})", startIdx);
+            StartSequenceInline(inlineSeq, startIdx, loop: false, elapsedMs);
+            _logger.LogInformation("API: インラインシーケンス再開 (step={Index}, 経過={Elapsed}ms)",
+                startIdx, elapsedMs);
             return true;
         }
 
@@ -306,7 +318,7 @@ public class EffectRunnerService
     }
 
     /// <summary>エディタ内容をインライン再生する（連続再生）。</summary>
-    public void StartSequenceInline(Sequence sequence, int startFromIndex = 0, bool loop = false)
+    public void StartSequenceInline(Sequence sequence, int startFromIndex = 0, bool loop = false, int initialElapsedMsInStartStep = 0)
     {
         lock (_lock)
         {
@@ -324,7 +336,7 @@ public class EffectRunnerService
             {
                 try
                 {
-                    await _sequencePlayer.PlayAsync(sequence, cts.Token, startFromIndex, loop);
+                    await _sequencePlayer.PlayAsync(sequence, cts.Token, startFromIndex, loop, initialElapsedMsInStartStep);
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
@@ -465,5 +477,6 @@ public class EffectRunnerService
         _pausedSequenceName = null;
         _pausedInlineSequence = null;
         _pausedStepIndex = -1;
+        _pausedElapsedMsInStep = 0;
     }
 }
