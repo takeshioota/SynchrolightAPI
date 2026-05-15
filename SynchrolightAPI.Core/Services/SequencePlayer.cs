@@ -78,6 +78,11 @@ public class SequencePlayer
     // PlayAsync が現在の run で受け取った startFromIndex を保持する
     private int _startFromIndexInRun;
 
+    // 最後に fire-and-forget で起動した連続エフェクトのタスク。
+    // シーケンスの全ステップ実行後、このタスクが未完了であれば await して
+    // シーケンスを IsPlaying=true のまま維持する。
+    private Task? _pendingContinuousEffectTask;
+
     /// <summary>
     /// シーケンスを再生する。CancellationToken でキャンセルするまで実行。
     /// </summary>
@@ -149,11 +154,25 @@ public class SequencePlayer
 
             } while (loop && !ct.IsCancellationRequested);
 
-            // 最終ステップを UI 側ポーリング（既定 200ms 間隔）が確実に検出できるよう、
-            // 完了状態への遷移前に短時間待機する。
-            await Task.Delay(300, ct);
-
-            _logger.LogInformation("シーケンス再生完了: {Name}", sequence.Name);
+            // 連続エフェクト（Flash 等）がバックグラウンドで動作中の場合、
+            // そのタスクを await してシーケンスを IsPlaying=true のまま維持する。
+            // これにより連続フラッシュがシーケンス完了後も安定して動作し、
+            // ユーザーが明示的に停止するまで IsPlaying 状態を保つ。
+            var pendingEffect = _pendingContinuousEffectTask;
+            _pendingContinuousEffectTask = null;
+            if (pendingEffect != null && !pendingEffect.IsCompleted)
+            {
+                _logger.LogInformation("シーケンス全ステップ実行完了 → 連続エフェクト動作中のため待機: {Name}", sequence.Name);
+                await pendingEffect;
+                _logger.LogInformation("連続エフェクト終了: {Name}", sequence.Name);
+            }
+            else
+            {
+                // 最終ステップを UI 側ポーリング（既定 200ms 間隔）が確実に検出できるよう、
+                // 完了状態への遷移前に短時間待機する。
+                await Task.Delay(300, ct);
+                _logger.LogInformation("シーケンス再生完了: {Name}", sequence.Name);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -168,6 +187,7 @@ public class SequencePlayer
             _runningSw = null;
             _currentStepFiredAtSwMs = -1;
             _initialElapsedOffsetMs = 0;
+            _pendingContinuousEffectTask = null;
         }
     }
 
@@ -188,6 +208,7 @@ public class SequencePlayer
                     var effectCt = _scheduler.BeginEffect(ct);
                     await _scheduler.SendFrameAsync(step.Field, color, effectCt);
                     _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, color, effectCt);
+                    _pendingContinuousEffectTask = null;  // Color に切り替わったのでエフェクト追跡をクリア
                     _logger.LogDebug("SEQ: Color ({R},{G},{B}) at {Time}ms", step.R, step.G, step.B, step.TimeOffsetMs);
                 }
                 break;
@@ -197,6 +218,7 @@ public class SequencePlayer
                     var effectCt = _scheduler.BeginEffect(ct);
                     await _scheduler.SendFrameAsync(step.Field, Rgb.Black, effectCt);
                     _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, Rgb.Black, effectCt);
+                    _pendingContinuousEffectTask = null;  // Off に切り替わったのでエフェクト追跡をクリア
                     _logger.LogDebug("SEQ: Off at {Time}ms", step.TimeOffsetMs);
                 }
                 break;
@@ -218,15 +240,18 @@ public class SequencePlayer
                         FadeSteps: step.FadeSteps ?? 20,
                         Continuous: step.Continuous
                     );
-                    // エフェクトをバックグラウンドで実行（次のステップに進む）
-                    _ = _effectEngine.RunAsync(effectParams, ct);
-                    _logger.LogDebug("SEQ: Effect {Type} ({R},{G},{B}) started at {Time}ms",
-                        step.EffectType, step.R, step.G, step.B, step.TimeOffsetMs);
+                    // エフェクトをバックグラウンドで実行（次のステップに進む）。
+                    // 連続エフェクトの場合はタスクを保持し、全ステップ実行後に await する。
+                    var effectTask = _effectEngine.RunAsync(effectParams, ct);
+                    _pendingContinuousEffectTask = step.Continuous ? effectTask : null;
+                    _logger.LogDebug("SEQ: Effect {Type} ({R},{G},{B}) continuous={Continuous} started at {Time}ms",
+                        step.EffectType, step.R, step.G, step.B, step.Continuous, step.TimeOffsetMs);
                 }
                 break;
 
             case SequenceCommandType.EffectStop:
                 _scheduler.Abort();
+                _pendingContinuousEffectTask = null;
                 _logger.LogDebug("SEQ: EffectStop at {Time}ms", step.TimeOffsetMs);
                 break;
         }

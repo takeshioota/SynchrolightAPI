@@ -100,6 +100,44 @@ public class EffectScheduler
     }
 
     /// <summary>
+    /// 連続フラッシュループ（BeginEffect 後に使用）。
+    /// 単一の Stopwatch で絶対時刻ベースの ON/OFF トグルを行い、
+    /// 短周期（100ms 以下）でも安定した点滅を実現する。
+    /// パケットは事前ビルドし、ループ内でのオブジェクト生成を排除する。
+    /// </summary>
+    public async Task RunFlashLoopAsync(
+        byte field, Rgb onColor, TimeSpan interval, CancellationToken effectCt)
+    {
+        var onPacket = LightProtocol.BuildA2_GlobalColor(field, onColor.R, onColor.G, onColor.B);
+        var offPacket = LightProtocol.BuildA2_GlobalColor(field, 0, 0, 0);
+        var intervalMs = (long)interval.TotalMilliseconds;
+
+        var sw = Stopwatch.StartNew();
+        long nextToggleMs = intervalMs;
+        var isOn = true;
+
+        while (!effectCt.IsCancellationRequested)
+        {
+            effectCt.ThrowIfCancellationRequested();
+
+            var packet = isOn ? onPacket : offPacket;
+            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+
+            // 絶対時刻でトグル判定（相対 delay の累積誤差を排除）
+            if (sw.ElapsedMilliseconds >= nextToggleMs)
+            {
+                isOn = !isOn;
+                nextToggleMs += intervalMs;
+            }
+
+            // 次のトグルまでの残り時間と送信間隔の短い方で待機
+            var untilToggle = (int)(nextToggleMs - sw.ElapsedMilliseconds);
+            var delayMs = Math.Clamp(Math.Min(ContinuousSendIntervalMs, untilToggle), 1, ContinuousSendIntervalMs);
+            await Task.Delay(delayMs, effectCt);
+        }
+    }
+
+    /// <summary>
     /// 指定色を連続的に再送信する。BeginEffect で新しい操作を開始し、
     /// キャンセルされるまで ~150ms 間隔で A2 パケットを送信し続ける。
     /// デバイスのセルフモード突入（200ms タイムアウト）を防止する。
