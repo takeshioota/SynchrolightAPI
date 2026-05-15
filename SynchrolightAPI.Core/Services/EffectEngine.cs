@@ -126,11 +126,18 @@ public class EffectEngine
     {
         var interval = p.FlashInterval ?? TimeSpan.FromMilliseconds(250);
 
-        do
+        if (p.Continuous)
         {
+            // 連続フラッシュ: 絶対時刻ベースの単一ループで精密に ON/OFF を切り替える。
+            // 短周期（100ms 以下）でもタイミング誤差が蓄積しない。
+            await _scheduler.RunFlashLoopAsync(p.Field, p.Color, interval, effectCt);
+        }
+        else
+        {
+            // 単発フラッシュ: 1 サイクル（ON→OFF）のみ実行
             await _scheduler.SendFrameForDurationAsync(p.Field, p.Color, interval, effectCt);
             await _scheduler.SendFrameForDurationAsync(p.Field, Rgb.Black, interval, effectCt);
-        } while (p.Continuous && !effectCt.IsCancellationRequested);
+        }
     }
 
     private async Task RunFadeInAsync(EffectParams p, CancellationToken effectCt)
