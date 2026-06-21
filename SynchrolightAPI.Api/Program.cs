@@ -41,6 +41,10 @@ builder.Services.AddSingleton<SequencePlayer>();
 builder.Services.AddSingleton<SequenceRecorder>();
 builder.Services.AddSingleton<EffectRunnerService>();
 
+// BLE (Bluetooth Low Energy) サービス
+builder.Services.AddSingleton<IBleTransport, BleTransport>();
+builder.Services.AddSingleton<BleFileTransferService>();
+
 var app = builder.Build();
 
 app.MapControllers();

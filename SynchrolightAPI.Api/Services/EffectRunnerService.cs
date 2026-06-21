@@ -1,6 +1,8 @@
 using SynchrolightAPI.Domain;
 using SynchrolightAPI.Models;
+using SynchrolightAPI.Protocol;
 using SynchrolightAPI.Services;
+using SynchrolightAPI.Transport;
 
 namespace SynchrolightAPI.Api.Services;
 
@@ -14,6 +16,7 @@ public class EffectRunnerService
     private readonly EffectScheduler _scheduler;
     private readonly SequencePlayer _sequencePlayer;
     private readonly SequenceStore _sequenceStore;
+    private readonly ITransport _transport;
     private readonly ILogger<EffectRunnerService> _logger;
     private readonly object _lock = new();
 
@@ -44,12 +47,14 @@ public class EffectRunnerService
         EffectScheduler scheduler,
         SequencePlayer sequencePlayer,
         SequenceStore sequenceStore,
+        ITransport transport,
         ILogger<EffectRunnerService> logger)
     {
         _effectEngine = effectEngine;
         _scheduler = scheduler;
         _sequencePlayer = sequencePlayer;
         _sequenceStore = sequenceStore;
+        _transport = transport;
         _logger = logger;
     }
 
@@ -171,6 +176,228 @@ public class EffectRunnerService
         }
 
         _logger.LogInformation("API: パケットホールド開始");
+    }
+
+    /// <summary>
+    /// SNO端末の内蔵プログラムを再生する（A1コマンド送信）。
+    /// 実行中のエフェクト/シーケンスは自動停止。
+    /// 内蔵プログラムは端末側で自律動作するため、PC側はA1パケットを連続送信して
+    /// 端末がセルフモードに戻らないようにする。
+    /// </summary>
+    public void StartInternalProgram(uint frameNo)
+    {
+        var packet = LightProtocol.BuildA1_PlaySequence(frameNo);
+        StartPacketHold(packet);
+        _logger.LogInformation("API: 内蔵プログラム再生開始 frame={FrameNo}", frameNo);
+    }
+
+    // --- Rainbow（V4.5: 3.15-3.22）---
+
+    /// <summary>
+    /// レインボーエフェクトを開始する。
+    /// 1. カラーパレット送信（0xA9 0x02）
+    /// 2. モードに応じた 0xA9 0x03 を colorFrameNo をサイクルしながら継続送信
+    /// </summary>
+    public void StartRainbow(
+        int mode,
+        (byte r, byte g, byte b)[] colors,
+        int cycleDurationMs,
+        int? blinkPeriodMs = null,
+        int? dutyRatio = null,
+        int? fadeInMs = null,
+        int? fadeOutMs = null)
+    {
+        lock (_lock)
+        {
+            StopSequenceInternal();
+            StopEffectInternal();
+
+            var cts = new CancellationTokenSource();
+            _effectCts = cts;
+            _currentEffect = null;
+
+            _effectTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await RunRainbowLoopAsync(
+                        mode, colors, cycleDurationMs,
+                        blinkPeriodMs, dutyRatio, fadeInMs, fadeOutMs,
+                        cts.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Rainbowタスク異常終了");
+                }
+                finally
+                {
+                    lock (_lock)
+                    {
+                        if (_effectCts == cts)
+                        {
+                            _currentEffect = null;
+                            _effectTask = null;
+                        }
+                    }
+                }
+            });
+        }
+
+        _logger.LogInformation("API: Rainbow開始 mode={Mode}, colors={N}, cycle={Cycle}ms",
+            mode, colors.Length, cycleDurationMs);
+    }
+
+    /// <summary>
+    /// 色テーブルのみ送信する（0xA9 0x02: 3.15 色テーブル定義）。
+    /// モード開始（0xA9 0x03）は送信しない。
+    /// </summary>
+    public async Task SendColorTableAsync(
+        (byte r, byte g, byte b)[] colors,
+        CancellationToken ct = default)
+    {
+        var packet = LightProtocol.BuildA9_SetRainbowColors(colors);
+        await _transport.EnqueueAsync(packet, ct);
+        _logger.LogInformation("API: 色テーブル送信 colors={N}", colors.Length);
+    }
+
+    /// <summary>
+    /// 7色ランダム一時停止（0xA9 0x04）を継続送信する。
+    /// </summary>
+    public void PauseRainbow()
+    {
+        var packet = LightProtocol.BuildA9_RainbowPause();
+        StartPacketHold(packet);
+        _logger.LogInformation("API: Rainbow一時停止（前回の色を保持）");
+    }
+
+    /// <summary>
+    /// レインボーの継続送信ループ。
+    /// カラー設定 → colorFrameNo をサイクルしながらモード別コマンドを 20ms 間隔で送信。
+    /// cycleDurationMs ごとに colorFrameNo を進める。
+    /// </summary>
+    private async Task RunRainbowLoopAsync(
+        int mode,
+        (byte r, byte g, byte b)[] colors,
+        int cycleDurationMs,
+        int? blinkPeriodMs,
+        int? dutyRatio,
+        int? fadeInMs,
+        int? fadeOutMs,
+        CancellationToken ct)
+    {
+        var effectCt = _scheduler.BeginEffect(ct);
+        int colorCount = colors.Length;
+
+        // Step 1: カラーパレット送信（0xA9 0x02）
+        var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(colors);
+        await _transport.EnqueueAsync(colorSetupPacket, effectCt);
+        await Task.Delay(50, effectCt); // パレット設定の反映待ち
+
+        // Step 2: モード別コマンドを colorFrameNo サイクルしながら継続送信
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        byte currentFrame = 0;
+
+        while (!effectCt.IsCancellationRequested)
+        {
+            // colorFrameNo を cycleDurationMs ごとに進める
+            if (cycleDurationMs > 0)
+            {
+                var elapsed = sw.ElapsedMilliseconds;
+                currentFrame = (byte)(elapsed / cycleDurationMs % colorCount);
+            }
+
+            // モード別パケット生成
+            byte[] packet = mode switch
+            {
+                0 => LightProtocol.BuildA9_RainbowSolid(currentFrame),
+                1 => LightProtocol.BuildA9_RainbowBlink(
+                         currentFrame,
+                         (ushort)Math.Clamp(blinkPeriodMs ?? 500, 100, 3600),
+                         (byte)Math.Clamp(dutyRatio ?? 5, 1, 9)),
+                2 => LightProtocol.BuildA9_RainbowFadeInOut(
+                         currentFrame,
+                         (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000),
+                         (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
+                3 => LightProtocol.BuildA9_RainbowFadeIn(
+                         currentFrame,
+                         (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000)),
+                4 => LightProtocol.BuildA9_RainbowFadeOut(
+                         currentFrame,
+                         (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
+                5 => LightProtocol.BuildA9_RainbowRandom(currentFrame),
+                _ => LightProtocol.BuildA9_RainbowSolid(currentFrame),
+            };
+
+            await _transport.EnqueueAsync(packet, effectCt);
+            await Task.Delay(20, effectCt); // 20ms 間隔
+        }
+    }
+
+    // --- ファイル書き込み（2.4GHz: 3.13-3.14）---
+
+    /// <summary>
+    /// 2.4GHz経由でRGBファイルデータを端末に書き込む。
+    /// 1. A9開始コマンド送信（データ長通知）
+    /// 2. rgbDataを6アドレスずつ分割してA7で送信
+    /// </summary>
+    public async Task WriteFileVia24GAsync(byte[] rgbData, uint frameNo, CancellationToken ct = default)
+    {
+        lock (_lock)
+        {
+            StopSequenceInternal();
+            StopEffectInternal();
+        }
+
+        _logger.LogInformation("API: 2.4Gファイル書き込み開始 frame={FrameNo}, size={Size}bytes",
+            frameNo, rgbData.Length);
+
+        // Step 1: A9 開始コマンド（データ長通知）
+        var startPacket = LightProtocol.BuildA9_FileWriteStart((ushort)rgbData.Length);
+        await _transport.EnqueueAsync(startPacket, ct);
+        await Task.Delay(100, ct); // 端末の準備待ち
+
+        // Step 2: A7 データ書き込み（6アドレスずつ分割）
+        // RGBデータは3バイトずつ = 1アドレス分のRGBデータ
+        int totalAddresses = rgbData.Length / 3;
+        int packetsSent = 0;
+
+        for (int addr = 0; addr < totalAddresses; addr += 6)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            int remaining = Math.Min(6, totalAddresses - addr);
+            var colors = new (byte r, byte g, byte b)[remaining];
+
+            for (int i = 0; i < remaining; i++)
+            {
+                int offset = (addr + i) * 3;
+                colors[i] = (rgbData[offset], rgbData[offset + 1], rgbData[offset + 2]);
+            }
+
+            // アドレスから行・列を計算（仮: addr = row * maxCol + col）
+            ushort row = (ushort)(addr / 256 + 1);
+            ushort col = (ushort)(addr % 256 + 1);
+
+            var dataPacket = LightProtocol.BuildA7_FileWriteData(
+                row, col, (byte)remaining, frameNo, colors);
+            await _transport.EnqueueAsync(dataPacket, ct);
+
+            packetsSent++;
+
+            // 送信間隔（端末のflash書き込み待ち）
+            if (packetsSent % 20 == 0)
+            {
+                await Task.Delay(500, ct); // 20パケットごとに500ms待機
+            }
+            else
+            {
+                await Task.Delay(20, ct);
+            }
+        }
+
+        _logger.LogInformation("API: 2.4Gファイル書き込み完了 frame={FrameNo}, packets={Packets}",
+            frameNo, packetsSent);
     }
 
     /// <summary>実行中のエフェクトを停止する。</summary>
@@ -388,6 +615,10 @@ public class EffectRunnerService
                 _inlineSequence = null;
             }
             _logger.LogDebug("ステップ再生: EffectStop");
+        }
+        else if (step.CommandType == SequenceCommandType.InternalProgram && step.FrameNo.HasValue)
+        {
+            StartInternalProgram(step.FrameNo.Value);
         }
         else if (step.CommandType is SequenceCommandType.Color or SequenceCommandType.Off)
         {

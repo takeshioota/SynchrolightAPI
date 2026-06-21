@@ -50,5 +50,30 @@ public record SetPowerRequest(int Power);
 public record RxChannelRequest(int Field, int StartRow, int Len, int Channel);
 public record BlockSectorRequest(int ProgNo, int BlockNo, ColorValue Color);
 
+// --- Internal Program (SNO夏版) ---
+public record InternalProgramRequest(uint FrameNo);
+
+// --- Rainbow (V4.5: 3.15-3.22) ---
+public record SendColorTableRequest(
+    ColorValue[] Colors,       // カラーパレット（2〜7色）
+    int CycleDurationMs = 1000 // 色切り替え速度（ms）— パレット送信後の反映待ち用
+);
+
+public record StartRainbowRequest(
+    int Mode,                  // 0=Solid, 1=Blink, 2=FadeInOut, 3=FadeIn, 4=FadeOut, 5=Random
+    ColorValue[] Colors,       // カラーパレット（2〜7色）
+    int CycleDurationMs,       // 色切り替え速度（ms）
+    int? BlinkPeriodMs,        // 点滅周期 — Blink モード時のみ
+    int? DutyRatio,            // 点灯比率（1-9） — Blink モード時のみ
+    int? FadeInMs,             // FI 時間 — FadeInOut/FadeIn モード時
+    int? FadeOutMs             // FO 時間 — FadeInOut/FadeOut モード時
+);
+
 // --- Transport (追加) ---
 public record KeepAliveRequest(string? Base64Packet);
+
+// --- File Write (2.4GHz: 3.13-3.14) ---
+public record FileWrite24GRequest(
+    uint FrameNo,              // 書き込み先フレーム番号
+    string Data                // Base64エンコードされたRGBデータ
+);

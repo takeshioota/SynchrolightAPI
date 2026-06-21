@@ -339,6 +339,206 @@ public static class LightProtocol
     }
 
     // ----------------------------
+    // ファイル書き込み（V4.5: 3.13-3.14）
+    // ----------------------------
+
+    /// <summary>
+    /// A9 (3.13): 一括ファイル書き込み開始コマンド
+    /// フォーマット: A9 01 00 01 [fileLenHi] [fileLenLo] [0埋め→32byte] cs
+    /// ファイル書き込みコマンドA7実行前に、データ長通知の開始コマンドを先に送信する。
+    /// </summary>
+    public static byte[] BuildA9_FileWriteStart(ushort fileLength)
+    {
+        var f = new byte[32];
+        f[0] = 0xA9;
+        f[1] = 0x01;
+        f[2] = 0x00;
+        f[3] = 0x01;
+        f[4] = (byte)((fileLength >> 8) & 0xFF);
+        f[5] = (byte)(fileLength & 0xFF);
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A7 (3.14): 2.4Gファイル書き込みデータ
+    /// フォーマット: A7 field rowHi rowLo colHi colLo len frameNo(4byte) [RGB×len(max6)] [0埋め→32byte] cs
+    /// ライトは自身のアドレスが範囲内なら保存し、範囲外なら無視する。
+    /// </summary>
+    public static byte[] BuildA7_FileWriteData(
+        ushort row, ushort col, byte len, uint frameNo,
+        (byte r, byte g, byte b)[] colors)
+    {
+        if (len == 0 || len > 6) throw new ArgumentOutOfRangeException(nameof(len), "len must be 1..6");
+        if (colors == null || colors.Length != len) throw new ArgumentException("colors length must equal len.");
+
+        var f = new byte[32];
+        f[0] = 0xA7;
+        f[1] = 0xFF; // 場次
+
+        f[2] = (byte)((row >> 8) & 0xFF);
+        f[3] = (byte)(row & 0xFF);
+
+        f[4] = (byte)((col >> 8) & 0xFF);
+        f[5] = (byte)(col & 0xFF);
+
+        f[6] = len;
+
+        // フレーム番号（4byte）
+        f[7] = (byte)(frameNo & 0xFF);
+        f[8] = (byte)((frameNo >> 8) & 0xFF);
+        f[9] = (byte)((frameNo >> 16) & 0xFF);
+        f[10] = (byte)((frameNo >> 24) & 0xFF);
+
+        // RGB データ（最大 6 × 3 = 18 byte）
+        int idx = 11;
+        for (int i = 0; i < len; i++)
+        {
+            f[idx++] = colors[i].r;
+            f[idx++] = colors[i].g;
+            f[idx++] = colors[i].b;
+        }
+
+        return Finalize32(f);
+    }
+
+    // ----------------------------
+    // Rainbow（V4.5: 3.15-3.22）
+    // ----------------------------
+
+    /// <summary>
+    /// A9 0x02: レインボーカラー設定（3.15）
+    /// 色リスト（2〜7色）を端末に送信する。3.16-3.22 の前に必ず送信すること。
+    /// フォーマット: A9 02 N [RGB×N] [0埋め] cs
+    /// </summary>
+    public static byte[] BuildA9_SetRainbowColors((byte r, byte g, byte b)[] colors)
+    {
+        if (colors == null || colors.Length < 2 || colors.Length > 7)
+            throw new ArgumentException("colors must have 2-7 items.", nameof(colors));
+
+        var f = new byte[32];
+        f[0] = 0xA9;
+        f[1] = 0x02;
+        f[2] = (byte)colors.Length;
+
+        int idx = 3;
+        for (int i = 0; i < colors.Length; i++)
+        {
+            f[idx++] = colors[i].r;
+            f[idx++] = colors[i].g;
+            f[idx++] = colors[i].b;
+        }
+
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A9 0x03 mode=0x00: レインボー常時点灯（3.16）
+    /// フォーマット: A9 03 00 colorFrameNo [0埋め] cs
+    /// </summary>
+    public static byte[] BuildA9_RainbowSolid(byte colorFrameNo)
+    {
+        var f = new byte[32];
+        f[0] = 0xA9;
+        f[1] = 0x03;
+        f[2] = 0x00;
+        f[3] = colorFrameNo;
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A9 0x03 mode=0x01: レインボー点滅（3.17）
+    /// フォーマット: A9 03 01 colorFrameNo periodHi periodLo dutyRatio [0埋め] cs
+    /// </summary>
+    public static byte[] BuildA9_RainbowBlink(byte colorFrameNo, ushort periodMs, byte dutyRatio)
+    {
+        var f = new byte[32];
+        f[0] = 0xA9;
+        f[1] = 0x03;
+        f[2] = 0x01;
+        f[3] = colorFrameNo;
+        f[4] = (byte)((periodMs >> 8) & 0xFF);
+        f[5] = (byte)(periodMs & 0xFF);
+        f[6] = dutyRatio;
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A9 0x03 mode=0x02: レインボー FI/FO（3.18）
+    /// フォーマット: A9 03 02 colorFrameNo fiHi fiLo foHi foLo [0埋め] cs
+    /// </summary>
+    public static byte[] BuildA9_RainbowFadeInOut(byte colorFrameNo, ushort fadeInMs, ushort fadeOutMs)
+    {
+        var f = new byte[32];
+        f[0] = 0xA9;
+        f[1] = 0x03;
+        f[2] = 0x02;
+        f[3] = colorFrameNo;
+        f[4] = (byte)((fadeInMs >> 8) & 0xFF);
+        f[5] = (byte)(fadeInMs & 0xFF);
+        f[6] = (byte)((fadeOutMs >> 8) & 0xFF);
+        f[7] = (byte)(fadeOutMs & 0xFF);
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A9 0x03 mode=0x03: レインボー フェードイン（3.19）
+    /// フォーマット: A9 03 03 colorFrameNo timeHi timeLo [0埋め] cs
+    /// </summary>
+    public static byte[] BuildA9_RainbowFadeIn(byte colorFrameNo, ushort timeMs)
+    {
+        var f = new byte[32];
+        f[0] = 0xA9;
+        f[1] = 0x03;
+        f[2] = 0x03;
+        f[3] = colorFrameNo;
+        f[4] = (byte)((timeMs >> 8) & 0xFF);
+        f[5] = (byte)(timeMs & 0xFF);
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A9 0x03 mode=0x04: レインボー フェードアウト（3.20）
+    /// フォーマット: A9 03 04 colorFrameNo timeHi timeLo [0埋め] cs
+    /// </summary>
+    public static byte[] BuildA9_RainbowFadeOut(byte colorFrameNo, ushort timeMs)
+    {
+        var f = new byte[32];
+        f[0] = 0xA9;
+        f[1] = 0x03;
+        f[2] = 0x04;
+        f[3] = colorFrameNo;
+        f[4] = (byte)((timeMs >> 8) & 0xFF);
+        f[5] = (byte)(timeMs & 0xFF);
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A9 0x03 mode=0x05: 7色ランダム点滅（3.21）
+    /// フォーマット: A9 03 05 colorFrameNo [0埋め] cs
+    /// </summary>
+    public static byte[] BuildA9_RainbowRandom(byte colorFrameNo)
+    {
+        var f = new byte[32];
+        f[0] = 0xA9;
+        f[1] = 0x03;
+        f[2] = 0x05;
+        f[3] = colorFrameNo;
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// A9 0x04: 7色ランダム一時停止（3.22）— 前回の色を保持して継続送信
+    /// フォーマット: A9 04 [0埋め] cs
+    /// </summary>
+    public static byte[] BuildA9_RainbowPause()
+    {
+        var f = new byte[32];
+        f[0] = 0xA9;
+        f[1] = 0x04;
+        return Finalize32(f);
+    }
+
+    // ----------------------------
     // 送信：SerialPort
     // ----------------------------
 
