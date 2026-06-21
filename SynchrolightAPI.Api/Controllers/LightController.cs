@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using SynchrolightAPI.Api.Models;
 using SynchrolightAPI.Api.Services;
 using SynchrolightAPI.Domain;
+using SynchrolightAPI.Models;
 using SynchrolightAPI.Protocol;
 using SynchrolightAPI.Services;
 using SynchrolightAPI.Transport;
@@ -183,6 +184,110 @@ public class LightController(ICommandBuilder cmd, ITransport transport, Sequence
         runner.StartPacketHold(packet);
         return Ok(new ApiResponse(true,
             Message: $"AE BlockSector prog={req.ProgNo} block={req.BlockNo} set to ({rgb.R},{rgb.G},{rgb.B})"));
+    }
+
+    // POST /api/light/internal-program — A1 (SNO内蔵プログラム再生)
+    [HttpPost("internal-program")]
+    public IActionResult InternalProgram([FromBody] InternalProgramRequest req)
+    {
+        runner.StartInternalProgram(req.FrameNo);
+        var prog = InternalProgramTable.FindByFrameNo(req.FrameNo);
+        var name = prog?.Name ?? "unknown";
+        return Ok(new ApiResponse(true,
+            Message: $"A1 Internal program started: frame={req.FrameNo} ({name})"));
+    }
+
+    // POST /api/light/internal-program/stop — 内蔵プログラム停止（A2黒で上書き）
+    [HttpPost("internal-program/stop")]
+    public IActionResult InternalProgramStop()
+    {
+        runner.StartColorHold(0x00, Rgb.Black);
+        return Ok(new ApiResponse(true, Message: "Internal program stopped (A2 off)"));
+    }
+
+    // GET /api/light/internal-program/list — 内蔵プログラム一覧
+    [HttpGet("internal-program/list")]
+    public IActionResult InternalProgramList()
+    {
+        var programs = InternalProgramTable.Programs.Select(p => new
+        {
+            p.FrameNo,
+            p.Name,
+            p.Description
+        });
+        return Ok(new ApiResponse(true, Data: new { programs }));
+    }
+
+    // --- File Write (2.4GHz: 3.13-3.14) ---
+
+    // POST /api/light/file-write/24g — 2.4GHz経由ファイル書き込み
+    [HttpPost("file-write/24g")]
+    public async Task<IActionResult> FileWrite24G([FromBody] FileWrite24GRequest req, CancellationToken ct)
+    {
+        byte[] data;
+        try
+        {
+            data = Convert.FromBase64String(req.Data);
+        }
+        catch (FormatException)
+        {
+            return BadRequest(new ApiResponse(false, Error: "Invalid base64 data"));
+        }
+
+        if (data.Length == 0 || data.Length % 3 != 0)
+            return BadRequest(new ApiResponse(false, Error: "Data length must be a multiple of 3 (RGB)"));
+
+        await runner.WriteFileVia24GAsync(data, req.FrameNo, ct);
+        return Ok(new ApiResponse(true,
+            Message: $"File write complete: frame={req.FrameNo}, size={data.Length}bytes"));
+    }
+
+    // --- Rainbow (V4.5: 3.15-3.22) ---
+
+    // POST /api/light/rainbow/color-table — 色テーブルのみ送信（3.15）
+    [HttpPost("rainbow/color-table")]
+    public async Task<IActionResult> RainbowColorTable(
+        [FromBody] SendColorTableRequest req, CancellationToken ct)
+    {
+        if (req.Colors == null || req.Colors.Length < 2 || req.Colors.Length > 7)
+            return BadRequest(new ApiResponse(false, Error: "colors must have 2-7 items"));
+
+        var colors = req.Colors.Select(c => (c.R, c.G, c.B)).ToArray();
+        await runner.SendColorTableAsync(colors, ct);
+        return Ok(new ApiResponse(true,
+            Message: $"Color table sent: colors={req.Colors.Length}"));
+    }
+
+    // POST /api/light/rainbow/start — レインボーエフェクト開始
+    [HttpPost("rainbow/start")]
+    public IActionResult RainbowStart([FromBody] StartRainbowRequest req)
+    {
+        if (req.Colors == null || req.Colors.Length < 2 || req.Colors.Length > 7)
+            return BadRequest(new ApiResponse(false, Error: "colors must have 2-7 items"));
+
+        var colors = req.Colors.Select(c => (c.R, c.G, c.B)).ToArray();
+        runner.StartRainbow(
+            req.Mode, colors, req.CycleDurationMs,
+            req.BlinkPeriodMs, req.DutyRatio,
+            req.FadeInMs, req.FadeOutMs);
+        return Ok(new ApiResponse(true,
+            Message: $"Rainbow started: mode={req.Mode}, colors={req.Colors.Length}, cycle={req.CycleDurationMs}ms"));
+    }
+
+    // POST /api/light/rainbow/stop — レインボーエフェクト停止
+    [HttpPost("rainbow/stop")]
+    public IActionResult RainbowStop()
+    {
+        runner.StopEffect();
+        return Ok(new ApiResponse(true, Message: "Rainbow stopped"));
+    }
+
+    // POST /api/light/rainbow/pause — 7色ランダム一時停止（前回の色を保持）
+    [HttpPost("rainbow/pause")]
+    public IActionResult RainbowPause()
+    {
+        runner.PauseRainbow();
+        return Ok(new ApiResponse(true, Message: "Rainbow paused (color held)"));
     }
 
     // POST /api/light/off — A2 (黒)

@@ -53,6 +53,28 @@ public class SequenceStep
 
     /// <summary>連続再生するか（false=単発実行後に最終色保持）。デフォルト: true</summary>
     public bool Continuous { get; set; } = true;
+
+    /// <summary>内蔵プログラムのフレーム番号（CommandType=InternalProgram時のみ有効）</summary>
+    public uint? FrameNo { get; set; }
+
+    // 2026-05-30 追加: スムーズ遷移サポート (A1)
+    /// <summary>
+    /// 行間遷移時間（ミリ秒）。0 または null = 即時切替、N > 0 = N ミリ秒かけて前ステップの色から滑らかに遷移。
+    /// </summary>
+    public int? TransitionMs { get; set; }
+
+    // 2026-05-30 追加: 2色カラーサポート (A2)
+    /// <summary>2色目 R（CommandType=Color2 時のみ有効）</summary>
+    public byte? R2 { get; set; }
+
+    /// <summary>2色目 G（CommandType=Color2 時のみ有効）</summary>
+    public byte? G2 { get; set; }
+
+    /// <summary>2色目 B（CommandType=Color2 時のみ有効）</summary>
+    public byte? B2 { get; set; }
+
+    /// <summary>BPM（CommandType=Color2 時のみ有効）。周期(ms) = 60000 / BPM</summary>
+    public int? Bpm { get; set; }
 }
 
 /// <summary>
@@ -68,4 +90,9 @@ public enum SequenceCommandType
     Effect,
     /// <summary>エフェクト停止</summary>
     EffectStop,
+    /// <summary>端末内蔵プログラム再生（A1コマンド）</summary>
+    InternalProgram,
+    // 2026-05-30 追加: 2色交互点灯 (A2)
+    /// <summary>2色交互点灯（BPMで指定した周期で Color1↔Color2 を繰り返す）</summary>
+    Color2,
 }

@@ -188,12 +188,52 @@ public class SequencePlayer
             _currentStepFiredAtSwMs = -1;
             _initialElapsedOffsetMs = 0;
             _pendingContinuousEffectTask = null;
+            _lastStepColor = null; // 2026-05-30 追加
         }
     }
+
+    // 2026-05-30 追加: スムーズ遷移で「前ステップの色」を記録する
+    private Rgb? _lastStepColor;
 
     /// <summary>単一ステップを即時実行する。</summary>
     public async Task ExecuteStepAsync(SequenceStep step, CancellationToken ct)
     {
+        // 2026-05-30 追加: TransitionMs によるスムーズ遷移 (A1)
+        var transitionMs = step.TransitionMs ?? 0;
+        if (transitionMs > 0 && _lastStepColor.HasValue
+            && (step.CommandType == SequenceCommandType.Color || step.CommandType == SequenceCommandType.Color2))
+        {
+            var from = _lastStepColor.Value;
+            var toR = step.R;
+            var toG = step.G;
+            var toB = step.B;
+            var intervalMs = 30;
+            var totalSteps = Math.Max(1, transitionMs / intervalMs);
+
+            _logger.LogDebug("SEQ: Transition ({FR},{FG},{FB})→({TR},{TG},{TB}) {Ms}ms",
+                from.R, from.G, from.B, toR, toG, toB, transitionMs);
+
+            for (int i = 1; i <= totalSteps; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var t = (double)i / totalSteps;
+                var r = (byte)(from.R + (toR - from.R) * t);
+                var g = (byte)(from.G + (toG - from.G) * t);
+                var b = (byte)(from.B + (toB - from.B) * t);
+
+                var effectCt = _scheduler.BeginEffect(ct);
+                await _scheduler.SendFrameAsync(step.Field, new Rgb(r, g, b), effectCt);
+                if (i < totalSteps)
+                    await Task.Delay(intervalMs, ct);
+            }
+            _lastStepColor = new Rgb(toR, toG, toB);
+            // 遷移完了後、最終色で連続送信を開始
+            var finalEffectCt = _scheduler.BeginEffect(ct);
+            _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, new Rgb(toR, toG, toB), finalEffectCt);
+            _pendingContinuousEffectTask = null;
+            return;
+        }
+
         var options = step.RetransmitCount.HasValue
             ? SendOptions.Default with { RetransmitCount = step.RetransmitCount }
             : SendOptions.Default;
@@ -209,6 +249,7 @@ public class SequencePlayer
                     await _scheduler.SendFrameAsync(step.Field, color, effectCt);
                     _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, color, effectCt);
                     _pendingContinuousEffectTask = null;  // Color に切り替わったのでエフェクト追跡をクリア
+                    _lastStepColor = color; // 2026-05-30 追加
                     _logger.LogDebug("SEQ: Color ({R},{G},{B}) at {Time}ms", step.R, step.G, step.B, step.TimeOffsetMs);
                 }
                 break;
@@ -219,6 +260,7 @@ public class SequencePlayer
                     await _scheduler.SendFrameAsync(step.Field, Rgb.Black, effectCt);
                     _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, Rgb.Black, effectCt);
                     _pendingContinuousEffectTask = null;  // Off に切り替わったのでエフェクト追跡をクリア
+                    _lastStepColor = Rgb.Black; // 2026-05-30 追加
                     _logger.LogDebug("SEQ: Off at {Time}ms", step.TimeOffsetMs);
                 }
                 break;
@@ -244,6 +286,7 @@ public class SequencePlayer
                     // 連続エフェクトの場合はタスクを保持し、全ステップ実行後に await する。
                     var effectTask = _effectEngine.RunAsync(effectParams, ct);
                     _pendingContinuousEffectTask = step.Continuous ? effectTask : null;
+                    _lastStepColor = new Rgb(step.R, step.G, step.B); // 2026-05-30 追加
                     _logger.LogDebug("SEQ: Effect {Type} ({R},{G},{B}) continuous={Continuous} started at {Time}ms",
                         step.EffectType, step.R, step.G, step.B, step.Continuous, step.TimeOffsetMs);
                 }
@@ -253,6 +296,55 @@ public class SequencePlayer
                 _scheduler.Abort();
                 _pendingContinuousEffectTask = null;
                 _logger.LogDebug("SEQ: EffectStop at {Time}ms", step.TimeOffsetMs);
+                break;
+
+            case SequenceCommandType.InternalProgram:
+                if (step.FrameNo.HasValue)
+                {
+                    // 前操作を停止し、A1パケットを連続送信してセルフモード突入を防止
+                    var a1Packet = LightProtocol.BuildA1_PlaySequence(step.FrameNo.Value);
+                    var effectCt = _scheduler.BeginEffect(ct);
+                    await _transport.EnqueueAsync(a1Packet, options, effectCt);
+                    _ = _scheduler.ContinuousSendPacketWithoutResetAsync(a1Packet, effectCt);
+                    _pendingContinuousEffectTask = null;
+                    _logger.LogDebug("SEQ: InternalProgram frame={FrameNo} at {Time}ms",
+                        step.FrameNo.Value, step.TimeOffsetMs);
+                }
+                break;
+
+            // 2026-05-30 追加: 2色交互点灯 (A2)
+            case SequenceCommandType.Color2:
+                {
+                    var color1 = new Rgb(step.R, step.G, step.B);
+                    var color2Alt = new Rgb(step.R2 ?? 0, step.G2 ?? 0, step.B2 ?? 0);
+                    var bpm = step.Bpm ?? 120;
+                    var cycleDurationMs = bpm > 0 ? 60000 / bpm : 500;
+                    var halfCycleMs = Math.Max(50, cycleDurationMs / 2);
+
+                    _logger.LogDebug("SEQ: Color2 ({R1},{G1},{B1})↔({R2},{G2},{B2}) BPM={BPM} at {Time}ms",
+                        color1.R, color1.G, color1.B, color2Alt.R, color2Alt.G, color2Alt.B, bpm, step.TimeOffsetMs);
+
+                    // 前操作を停止し、交互点灯ループを開始
+                    var effectCt = _scheduler.BeginEffect(ct);
+                    var color2Task = Task.Run(async () =>
+                    {
+                        var isFirst = true;
+                        while (!effectCt.IsCancellationRequested)
+                        {
+                            var c = isFirst ? color1 : color2Alt;
+                            try
+                            {
+                                await _scheduler.SendFrameAsync(step.Field, c, effectCt);
+                            }
+                            catch { break; }
+                            isFirst = !isFirst;
+                            try { await Task.Delay(halfCycleMs, effectCt); }
+                            catch (OperationCanceledException) { break; }
+                        }
+                    }, effectCt);
+                    _pendingContinuousEffectTask = color2Task;
+                    _lastStepColor = color1;
+                }
                 break;
         }
     }
