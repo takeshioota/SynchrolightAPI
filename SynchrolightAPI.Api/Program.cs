@@ -31,6 +31,9 @@ builder.Services.AddSingleton<ITransport>(sp =>
         sp.GetRequiredService<SendLogStore>()));
 builder.Services.AddSingleton<LightingService>();
 builder.Services.AddHostedService<TxWorkerService>();
+// ポート死活監視（ケーブル抜け検知ハートビート + 自動再接続）。
+// 5秒ごとに ReconcilePhysicalPorts() で USB 抜去ポートを切断としてマークする。
+builder.Services.AddHostedService<PortHealthMonitor>();
 
 // Effect / Sequence サービス
 builder.Services.AddSingleton<InterpolationService>();
