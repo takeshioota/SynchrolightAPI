@@ -31,6 +31,11 @@ public class PortHealthMonitor : BackgroundService
         {
             await Task.Delay(_checkInterval, stoppingToken);
 
+            // ハートビート: USB 抜去等で OS のポート一覧から消えたオープン中ポートを
+            // 切断としてマークする。SerialPort.IsOpen は抜去後も true のままになるため、
+            // 送信が無い待機中でも能動的に死活を確認する。
+            _transport.ReconcilePhysicalPorts();
+
             var expectedPorts = _transport.ExpectedPortNames;
             var currentPorts = _transport.ListPorts();
 

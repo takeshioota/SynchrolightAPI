@@ -66,6 +66,38 @@ public class MultiPortTransport : ITransport, IDisposable
         }
     }
 
+    /// <summary>
+    /// 物理的に存在しなくなった（USB 抜去等で OS のポート一覧から消えた）オープン中ポートを
+    /// 検出し、切断済みとしてクローズする。SerialPort.IsOpen は USB 抜去後も true のまま残る
+    /// ため、OS のポート一覧（SerialPort.GetPortNames）と突き合わせて死活を判定する。
+    /// 待機中（送信が無く Write 例外による検出が働かない状態）でも切断を検知するためのハートビート。
+    /// PortHealthMonitor から定期的に呼び出される。
+    /// </summary>
+    internal void ReconcilePhysicalPorts()
+    {
+        string[] available;
+        try { available = SerialPort.GetPortNames(); }
+        catch { return; }
+        var availableSet = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
+
+        List<SerialPort> vanished;
+        lock (_lock)
+        {
+            vanished = _ports
+                .Where(p => p.IsOpen && !availableSet.Contains(p.PortName))
+                .ToList();
+        }
+
+        foreach (var sp in vanished)
+        {
+            _logger.LogWarning(
+                "ポート {PortName} が OS のポート一覧から消失（ケーブル抜け等）。切断としてマークします。",
+                sp.PortName);
+            SetLastError($"{sp.PortName}: disconnected (cable removed)");
+            MarkPortDisconnected(sp.PortName);
+        }
+    }
+
     /// <summary>切断されたポートの再接続を試行</summary>
     internal bool TryReconnectPort(string portName)
     {
