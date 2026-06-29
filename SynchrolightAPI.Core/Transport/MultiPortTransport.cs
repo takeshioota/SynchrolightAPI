@@ -302,8 +302,12 @@ public class MultiPortTransport : ITransport, IDisposable
 
     public void FlushQueue()
     {
+        // 通常・高優先の両チャネルを破棄する。
+        // 高優先チャネルも消化対象に含めないと、TxWorker が高優先を先に読むため、
+        // 残存した高優先パケットが Emergency 等の新コマンド送信より前に流れてしまう。
         while (_normalChannel.Reader.TryRead(out _)) { }
-        _logger.LogInformation("通常キューをフラッシュしました");
+        while (_highPriorityChannel.Reader.TryRead(out _)) { }
+        _logger.LogInformation("送信キュー（通常・高優先）をフラッシュしました");
     }
 
     public TransportStatus GetStatus()

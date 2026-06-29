@@ -346,6 +346,120 @@ public class SequencePlayer
                     _lastStepColor = color1;
                 }
                 break;
+
+            // V4.5: レインボー（CommandType=Rainbow/RainbowStop/RainbowPause）
+            // 注意: ライブ用 EffectRunnerService.StartRainbow()/PauseRainbow() は内部で
+            //       StopSequenceInternal()（StartPacketHold 経由）を呼び、再生中シーケンスを
+            //       停止してしまう。ここでは呼ばず、scheduler/transport プリミティブのみで実装する。
+            case SequenceCommandType.Rainbow:
+                {
+                    var rbColors = (step.RainbowColors != null && step.RainbowColors.Count > 0)
+                        ? step.RainbowColors.Select(c => (c.R, c.G, c.B)).ToArray()
+                        : DefaultRainbowColors;
+                    var mode = step.RainbowMode ?? 0;
+                    var cycle = step.RainbowCycleDurationMs ?? 1000;
+                    // BeginEffect で前操作を停止し、自前のレインボーループを fire-and-forget で開始。
+                    var effectCt = _scheduler.BeginEffect(ct);
+                    var rainbowTask = RunRainbowLoopAsync(
+                        mode, rbColors, cycle,
+                        step.RainbowBlinkPeriodMs, step.RainbowDutyRatio,
+                        step.RainbowFadeInMs, step.RainbowFadeOutMs, effectCt);
+                    _pendingContinuousEffectTask = rainbowTask;
+                    _logger.LogDebug("SEQ: Rainbow mode={Mode} colors={N} cycle={Cycle}ms at {Time}ms",
+                        mode, rbColors.Length, cycle, step.TimeOffsetMs);
+                }
+                break;
+
+            case SequenceCommandType.RainbowStop:
+                _scheduler.Abort();
+                _pendingContinuousEffectTask = null;
+                _logger.LogDebug("SEQ: RainbowStop at {Time}ms", step.TimeOffsetMs);
+                break;
+
+            case SequenceCommandType.RainbowPause:
+                {
+                    // InternalProgram と同様に、0xA9 0x04（前回色保持）を連続送信して
+                    // 端末がセルフモードに戻らないようにする。シーケンスは停止しない。
+                    var pausePacket = LightProtocol.BuildA9_RainbowPause();
+                    var effectCt = _scheduler.BeginEffect(ct);
+                    await _transport.EnqueueAsync(pausePacket, options, effectCt);
+                    _ = _scheduler.ContinuousSendPacketWithoutResetAsync(pausePacket, effectCt);
+                    _pendingContinuousEffectTask = null;
+                    _logger.LogDebug("SEQ: RainbowPause (0xA9 0x04) at {Time}ms", step.TimeOffsetMs);
+                }
+                break;
         }
+    }
+
+    /// <summary>レインボーループ用の既定カラーパレット（7色）。ステップに色指定が無い場合に使用。</summary>
+    private static readonly (byte r, byte g, byte b)[] DefaultRainbowColors =
+    {
+        (0xFF, 0x00, 0x00), (0xFF, 0x7F, 0x00), (0xFF, 0xFF, 0x00),
+        (0x00, 0xFF, 0x00), (0x00, 0x00, 0xFF), (0x4B, 0x00, 0x82), (0x94, 0x00, 0xD3),
+    };
+
+    /// <summary>
+    /// レインボーの継続送信ループ（シーケンスステップ用）。
+    /// EffectRunnerService.RunRainbowLoopAsync と同等のロジックを、再生中シーケンスを
+    /// 停止しないよう scheduler/transport プリミティブのみで実装したもの。
+    /// 1. カラーパレット送信（0xA9 0x02）
+    /// 2. cycleDurationMs ごとに colorFrameNo を進めつつ、モード別 0xA9 0x03 を 20ms 間隔で継続送信
+    /// </summary>
+    private async Task RunRainbowLoopAsync(
+        int mode,
+        (byte r, byte g, byte b)[] colors,
+        int cycleDurationMs,
+        int? blinkPeriodMs,
+        int? dutyRatio,
+        int? fadeInMs,
+        int? fadeOutMs,
+        CancellationToken effectCt)
+    {
+        try
+        {
+            int colorCount = Math.Max(1, colors.Length);
+
+            // Step 1: カラーパレット送信（0xA9 0x02）
+            var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(colors);
+            await _transport.EnqueueAsync(colorSetupPacket, SendOptions.Default, effectCt);
+            await Task.Delay(50, effectCt); // パレット設定の反映待ち
+
+            // Step 2: モード別コマンドを colorFrameNo サイクルしながら継続送信
+            var sw = Stopwatch.StartNew();
+            byte currentFrame = 0;
+            while (!effectCt.IsCancellationRequested)
+            {
+                if (cycleDurationMs > 0)
+                {
+                    var elapsed = sw.ElapsedMilliseconds;
+                    currentFrame = (byte)(elapsed / cycleDurationMs % colorCount);
+                }
+
+                byte[] packet = mode switch
+                {
+                    0 => LightProtocol.BuildA9_RainbowSolid(currentFrame),
+                    1 => LightProtocol.BuildA9_RainbowBlink(
+                             currentFrame,
+                             (ushort)Math.Clamp(blinkPeriodMs ?? 500, 100, 3600),
+                             (byte)Math.Clamp(dutyRatio ?? 5, 1, 9)),
+                    2 => LightProtocol.BuildA9_RainbowFadeInOut(
+                             currentFrame,
+                             (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000),
+                             (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
+                    3 => LightProtocol.BuildA9_RainbowFadeIn(
+                             currentFrame,
+                             (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000)),
+                    4 => LightProtocol.BuildA9_RainbowFadeOut(
+                             currentFrame,
+                             (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
+                    5 => LightProtocol.BuildA9_RainbowRandom(currentFrame),
+                    _ => LightProtocol.BuildA9_RainbowSolid(currentFrame),
+                };
+
+                await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+                await Task.Delay(20, effectCt); // 20ms 間隔
+            }
+        }
+        catch (OperationCanceledException) { /* 次操作への遷移／停止による正常キャンセル */ }
     }
 }
