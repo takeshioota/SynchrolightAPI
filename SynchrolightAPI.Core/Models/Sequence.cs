@@ -1,4 +1,5 @@
 using SynchrolightAPI.Services;
+using SynchrolightAPI.Domain;
 
 namespace SynchrolightAPI.Models;
 
@@ -75,6 +76,28 @@ public class SequenceStep
 
     /// <summary>BPM（CommandType=Color2 時のみ有効）。周期(ms) = 60000 / BPM</summary>
     public int? Bpm { get; set; }
+
+    // V4.5 追加: レインボー（CommandType=Rainbow 時のみ有効）
+    /// <summary>レインボーモード（0=Solid/1=Blink/2=FadeInOut/3=FadeIn/4=FadeOut/5=Random）</summary>
+    public int? RainbowMode { get; set; }
+
+    /// <summary>レインボーカラーパレット（2〜7色）</summary>
+    public List<Rgb>? RainbowColors { get; set; }
+
+    /// <summary>色切り替え速度（ms）</summary>
+    public int? RainbowCycleDurationMs { get; set; }
+
+    /// <summary>点滅周期（ms）— Blink モード時のみ</summary>
+    public int? RainbowBlinkPeriodMs { get; set; }
+
+    /// <summary>点灯比率（1〜9）— Blink モード時のみ</summary>
+    public int? RainbowDutyRatio { get; set; }
+
+    /// <summary>フェードイン時間（ms）— FadeInOut/FadeIn モード時</summary>
+    public int? RainbowFadeInMs { get; set; }
+
+    /// <summary>フェードアウト時間（ms）— FadeInOut/FadeOut モード時</summary>
+    public int? RainbowFadeOutMs { get; set; }
 }
 
 /// <summary>
@@ -95,4 +118,11 @@ public enum SequenceCommandType
     // 2026-05-30 追加: 2色交互点灯 (A2)
     /// <summary>2色交互点灯（BPMで指定した周期で Color1↔Color2 を繰り返す）</summary>
     Color2,
+    // V4.5 追加: レインボー（0xA9） — シーケンスステップ対応
+    /// <summary>レインボー開始（0xA9 0x02 色テーブル → 0xA9 0x03 モード継続送信）</summary>
+    Rainbow,
+    /// <summary>レインボー停止（連続送信中断）</summary>
+    RainbowStop,
+    /// <summary>レインボー一時停止（0xA9 0x04: 前回色を保持して継続送信）</summary>
+    RainbowPause,
 }

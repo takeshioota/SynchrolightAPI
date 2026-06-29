@@ -627,6 +627,25 @@ public class EffectRunnerService
                 : new Rgb(step.R, step.G, step.B);
             StartColorHold(step.Field, color);
         }
+        else if (step.CommandType == SequenceCommandType.Rainbow)
+        {
+            var colors = (step.RainbowColors != null && step.RainbowColors.Count > 0)
+                ? step.RainbowColors.Select(c => (c.R, c.G, c.B)).ToArray()
+                : new (byte, byte, byte)[] { (0xFF, 0x00, 0x00), (0x00, 0x00, 0xFF) };
+            StartRainbow(
+                step.RainbowMode ?? 0, colors, step.RainbowCycleDurationMs ?? 1000,
+                step.RainbowBlinkPeriodMs, step.RainbowDutyRatio,
+                step.RainbowFadeInMs, step.RainbowFadeOutMs);
+        }
+        else if (step.CommandType == SequenceCommandType.RainbowStop)
+        {
+            StopEffect();
+            _logger.LogDebug("ステップ再生: RainbowStop");
+        }
+        else if (step.CommandType == SequenceCommandType.RainbowPause)
+        {
+            PauseRainbow();
+        }
 
         return Task.CompletedTask;
     }
