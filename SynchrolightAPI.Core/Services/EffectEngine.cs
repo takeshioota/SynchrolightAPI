@@ -103,6 +103,8 @@ public class EffectEngine
             // 最終色を連続送信してデバイスのセルフモード突入を防止する。
             var finalColor = GetFinalColor(p);
             _logger.LogInformation("エフェクト完了 → 最終色保持: ({R},{G},{B})", finalColor.R, finalColor.G, finalColor.B);
+            // 高優先ラッチ: 通常キューが混雑（Chase 等）していても最終色を先に届け、確実に発色させる。
+            await _scheduler.LatchColorHighPriorityAsync(p.Field, finalColor, effectCt);
             await _scheduler.ContinuousSendWithoutResetAsync(p.Field, finalColor, effectCt);
         }
         catch (OperationCanceledException)
