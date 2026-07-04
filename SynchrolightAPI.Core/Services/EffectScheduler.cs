@@ -19,6 +19,15 @@ public class EffectScheduler
     /// </summary>
     private const int ContinuousSendIntervalMs = 20;
 
+    /// <summary>
+    /// 連続送信フレームのデッドライン（ms）。エンキューからこの時間内に送信されなければ
+    /// TxWorker が破棄する（SendEnvelope.IsExpired）。これによりキュー滞留（backlog）を
+    /// 防ぎ、常に最新色が届く。高頻度エフェクト（Chase 等）で通常キュー(256)が飽和し
+    /// StopEffect の FlushQueue で送信途中の色が落ちる問題への対策。
+    /// Flash ループ（RunFlashLoopAsync）と同じ考え方をフェード/保持経路にも適用する。
+    /// </summary>
+    private const int ContinuousSendDeadlineMs = 80;
+
     private readonly ITransport _transport;
     private readonly InterpolationService _interpolation;
     private readonly ILogger<EffectScheduler> _logger;
@@ -79,6 +88,28 @@ public class EffectScheduler
     }
 
     /// <summary>
+    /// 連続送信フレーム用の送信オプションを生成する（呼び出し毎にフレッシュな Deadline）。
+    /// RetransmitCount=1 で TxWorker の1パケット処理を軽くしてキュー消化を速める
+    /// （多ポート×再送3回だと消化が投入(50回/秒)に追いつかずキューが飽和するため）。
+    /// パケットロス耐性は 20ms 間隔の連続再送そのものが担保する。
+    /// </summary>
+    private static SendOptions ContinuousSendOptions() =>
+        new(Deadline: DateTimeOffset.UtcNow.AddMilliseconds(ContinuousSendDeadlineMs), RetransmitCount: 1);
+
+    /// <summary>
+    /// 指定色を高優先キューで送出する（ラッチ）。通常キューの滞留(backlog)を飛び越えて
+    /// 確実に発色させるために、エフェクトのフェード完了直後などに1発だけ呼ぶ。
+    /// 高優先キューは TxWorker が通常キューより先に消化するため、混雑時でも即時に届く。
+    /// </summary>
+    public async Task LatchColorHighPriorityAsync(byte field, Rgb color, CancellationToken effectCt)
+    {
+        effectCt.ThrowIfCancellationRequested();
+        var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
+        var options = new SendOptions(HighPriority: true, RetransmitCount: 2);
+        await _transport.EnqueueAsync(packet, options, effectCt);
+    }
+
+    /// <summary>
     /// 指定色を指定時間連続送信する（BeginEffect 後に使用）。
     /// holdDuration の間、ContinuousSendIntervalMs 間隔でパケットを送信し続ける。
     /// Flash の ON/OFF フェーズや補間ステップの保持に使用する。
@@ -91,7 +122,7 @@ public class EffectScheduler
         while (sw.Elapsed < holdDuration)
         {
             effectCt.ThrowIfCancellationRequested();
-            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+            await _transport.EnqueueAsync(packet, ContinuousSendOptions(), effectCt);
             var remainingMs = (holdDuration - sw.Elapsed).TotalMilliseconds;
             var delayMs = (int)Math.Min(ContinuousSendIntervalMs, Math.Max(0, remainingMs));
             if (delayMs > 0)
@@ -161,7 +192,7 @@ public class EffectScheduler
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
         while (!effectCt.IsCancellationRequested)
         {
-            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+            await _transport.EnqueueAsync(packet, ContinuousSendOptions(), effectCt);
             await Task.Delay(ContinuousSendIntervalMs, effectCt);
         }
     }
@@ -177,7 +208,7 @@ public class EffectScheduler
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
         while (!effectCt.IsCancellationRequested)
         {
-            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+            await _transport.EnqueueAsync(packet, ContinuousSendOptions(), effectCt);
             await Task.Delay(ContinuousSendIntervalMs, effectCt);
         }
     }
@@ -192,7 +223,7 @@ public class EffectScheduler
     {
         while (!effectCt.IsCancellationRequested)
         {
-            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+            await _transport.EnqueueAsync(packet, ContinuousSendOptions(), effectCt);
             await Task.Delay(ContinuousSendIntervalMs, effectCt);
         }
     }
@@ -209,7 +240,7 @@ public class EffectScheduler
 
         while (!effectCt.IsCancellationRequested)
         {
-            await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+            await _transport.EnqueueAsync(packet, ContinuousSendOptions(), effectCt);
             await Task.Delay(ContinuousSendIntervalMs, effectCt);
         }
     }
