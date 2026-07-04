@@ -18,7 +18,8 @@ public class InterpolationService
     /// <returns>補間されたRGB配列（from含む、to含む）</returns>
     public IReadOnlyList<Rgb> LinearSteps(Rgb from, Rgb to, int stepCount)
     {
-        if (stepCount < 1) throw new ArgumentOutOfRangeException(nameof(stepCount), "stepCount must be >= 1");
+        // NO.39: 防御的に下限1へクランプ（例外で Fade が落ちて「動作しない」のを防止）。
+        if (stepCount < 1) stepCount = 1;
 
         var steps = new Rgb[stepCount + 1];
         for (int i = 0; i <= stepCount; i++)
@@ -50,7 +51,8 @@ public class InterpolationService
     /// </summary>
     public TimeSpan CalcStepInterval(TimeSpan duration, int stepCount)
     {
-        if (stepCount < 1) throw new ArgumentOutOfRangeException(nameof(stepCount));
+        // NO.39: 防御的に下限1へクランプ（0除算/例外で Fade が落ちるのを防止）。
+        if (stepCount < 1) stepCount = 1;
         return TimeSpan.FromMilliseconds(duration.TotalMilliseconds / stepCount);
     }
 
