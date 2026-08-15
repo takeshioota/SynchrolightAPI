@@ -245,21 +245,46 @@ public static class LightProtocol
     }
 
     /// <summary>
-    /// A6: 受信ライトのチャンネル設定（兼 ハートビート）
-    /// フォーマット: A6 field startRowHi startRowLo len ch [0埋め] cs
+    /// A6: 受信端チャンネル設定（前後分区・行ベース）— 周波数変更 3.6【2026-07-24 訂正仕様 / Jacky回答】
+    /// 全体ブロードキャストの固定フレーム: A6 00 FF FF 01 ch [0埋め] cs
+    ///   場次=0x00 / 開始行=0xFFFF / 長さ=0x01 はいずれも固定値。可変は ch(0x01～0x04) のみ。
+    ///   ※2026-07-24 更新: 場次を 0xFF → 0x00 に訂正（Jacky回答）。開始行=0xFFFF・長さ=0x01 は据置。
+    ///     旧々実装は field=0x00 / 開始行=0x0000(0x0001) / 長さ=0xFF を送っており端末が受理しなかった。
+    ///   cs=(0xA5+ch)&0xFF → ch2=0xA7 / ch3=0xA8 / ch4=0xA9。
     /// </summary>
-    public static byte[] BuildA6_SetRxChannel(byte field, ushort startRow, byte len, byte ch)
+    public static byte[] BuildA6_SetRxChannel(byte ch)
     {
-        if (startRow < 1) throw new ArgumentOutOfRangeException(nameof(startRow));
-        if (len == 0) throw new ArgumentOutOfRangeException(nameof(len));
+        if (ch < 1 || ch > 4) throw new ArgumentOutOfRangeException(nameof(ch), "ch must be 1..4");
 
         var f = new byte[32];
-        f[0] = 0xA6;
-        f[1] = field;
-        f[2] = (byte)((startRow >> 8) & 0xFF);
-        f[3] = (byte)(startRow & 0xFF);
-        f[4] = len;
-        f[5] = ch;
+        f[0] = 0xA6; // フレームヘッダ
+        f[1] = 0x00; // 場次（2026-07-24 訂正: 0xFF→0x00）
+        f[2] = 0xFF; // 開始行 Hi
+        f[3] = 0xFF; // 開始行 Lo（開始行=0xFFFF）
+        f[4] = 0x01; // 長さ
+        f[5] = ch;   // チャンネル(0x01～0x04)
+
+        return Finalize32(f);
+    }
+
+    /// <summary>
+    /// AD: 受信端チャンネル設定（左右分区・列ベース）— 周波数変更 3.7【2026-07-24 訂正仕様 / Jacky回答】
+    /// 全体ブロードキャストの固定フレーム: AD 00 FF FF 01 ch [0埋め] cs
+    ///   場次=0x00 / 開始列=0xFFFF / 長さ=0x01 はいずれも固定値。可変は ch(0x01～0x04) のみ。
+    ///   ※2026-07-24 更新: 場次を 0xFF → 0x00 に訂正（Jacky回答）。A6 と同一の固定値。
+    ///   cs=(0xAC+ch)&0xFF → ch2=0xAE / ch3=0xAF / ch4=0xB0。
+    /// </summary>
+    public static byte[] BuildAD_SetRxChannel(byte ch)
+    {
+        if (ch < 1 || ch > 4) throw new ArgumentOutOfRangeException(nameof(ch), "ch must be 1..4");
+
+        var f = new byte[32];
+        f[0] = 0xAD; // フレームヘッダ
+        f[1] = 0x00; // 場次（2026-07-24 訂正: 0xFF→0x00）
+        f[2] = 0xFF; // 開始列 Hi
+        f[3] = 0xFF; // 開始列 Lo（開始列=0xFFFF）
+        f[4] = 0x01; // 長さ
+        f[5] = ch;   // チャンネル(0x01～0x04)
 
         return Finalize32(f);
     }

@@ -177,7 +177,16 @@ public class SequencePlayer
         catch (OperationCanceledException)
         {
             _logger.LogInformation("シーケンス再生中断: {Name}", sequence.Name);
-            _scheduler.Abort();
+            // BUG-20260814-01(No.98): ここで _scheduler.Abort() を呼ぶと共有 _activeCts を
+            // キャンセルしてしまう。停止 → 設定色ホールド(StartColorHold) の順で走るとき、
+            // このシーケンス teardown は別タスク上で「遅延着弾」し、後発の StartColorHold が
+            // 確立した _activeCts（設定色の連続送信）を横取りキャンセルする TOCTOU となる。
+            // その結果、Effect(FadeIn/FadeOut/Flash) を動作中に停止すると、設定色ホールドが即死し
+            // 停止直前の中間フレーム色（減光/黒/Flash枠）が残る＝設定色と違う色が点灯していた。
+            // シーケンスをキャンセルする全経路（StopSequenceInternal 等）は必ず直後に
+            // FlushAndStop()=Abort で停止＋flush 済のため、ここでの Abort は冗長。
+            // 停止直後に紛れ込んだ残フレームを掃くキュー掃除のみ行い、共有 CTS には触れない。
+            _transport.FlushQueue();
         }
         finally
         {
@@ -204,32 +213,20 @@ public class SequencePlayer
             && (step.CommandType == SequenceCommandType.Color || step.CommandType == SequenceCommandType.Color2))
         {
             var from = _lastStepColor.Value;
-            var toR = step.R;
-            var toG = step.G;
-            var toB = step.B;
-            var intervalMs = 30;
-            var totalSteps = Math.Max(1, transitionMs / intervalMs);
+            var to = new Rgb(step.R, step.G, step.B);
 
             _logger.LogDebug("SEQ: Transition ({FR},{FG},{FB})→({TR},{TG},{TB}) {Ms}ms",
-                from.R, from.G, from.B, toR, toG, toB, transitionMs);
+                from.R, from.G, from.B, to.R, to.G, to.B, transitionMs);
 
-            for (int i = 1; i <= totalSteps; i++)
-            {
-                ct.ThrowIfCancellationRequested();
-                var t = (double)i / totalSteps;
-                var r = (byte)(from.R + (toR - from.R) * t);
-                var g = (byte)(from.G + (toG - from.G) * t);
-                var b = (byte)(from.B + (toB - from.B) * t);
-
-                var effectCt = _scheduler.BeginEffect(ct);
-                await _scheduler.SendFrameAsync(step.Field, new Rgb(r, g, b), effectCt);
-                if (i < totalSteps)
-                    await Task.Delay(intervalMs, ct);
-            }
-            _lastStepColor = new Rgb(toR, toG, toB);
-            // 遷移完了後、最終色で連続送信を開始
-            var finalEffectCt = _scheduler.BeginEffect(ct);
-            _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, new Rgb(toR, toG, toB), finalEffectCt);
+            // スムーズ遷移はエフェクトと同じ堅牢な補間送信（≈20ms/50fps・各フレーム保持中も再送）に統一する。
+            // 旧実装は 30ms・1発送信・ループ内で毎回 BeginEffect（＝毎フレーム キューflush）だったため、
+            // 時間方向のカクつきとチラつき/不安定の原因になっていた。BeginEffect は遷移開始時に1回だけ呼ぶ。
+            var effectCt = _scheduler.BeginEffect(ct);
+            await _scheduler.SendInterpolationAsync(
+                step.Field, from, to, 20, TimeSpan.FromMilliseconds(transitionMs), effectCt);
+            _lastStepColor = to;
+            // 遷移完了後、最終色で連続送信を継続
+            _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, to, effectCt);
             _pendingContinuousEffectTask = null;
             return;
         }

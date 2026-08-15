@@ -28,6 +28,18 @@ public class EffectScheduler
     /// </summary>
     private const int ContinuousSendDeadlineMs = 80;
 
+    /// <summary>
+    /// 補間フレーム数の下限。ごく短時間の Fade でも最低限の色解像度を確保する
+    /// （従来 UI 側の下限と同じ 10）。
+    /// </summary>
+    private const int MinInterpolationFrames = 10;
+
+    /// <summary>
+    /// 補間フレーム数の上限。所要時間から算出したフレーム数が過大になっても
+    /// 過剰送信（キュー飽和）を防ぐための安全上限。20ms×1500 = 30 秒相当。
+    /// </summary>
+    private const int MaxInterpolationFrames = 1500;
+
     private readonly ITransport _transport;
     private readonly InterpolationService _interpolation;
     private readonly ILogger<EffectScheduler> _logger;
@@ -64,10 +76,25 @@ public class EffectScheduler
     /// </summary>
     public async Task SendInterpolationAsync(
         byte field, Rgb from, Rgb to, int stepCount,
-        TimeSpan duration, CancellationToken effectCt)
+        TimeSpan duration, CancellationToken effectCt, bool perceptual = false)
     {
-        var steps = _interpolation.LinearSteps(from, to, stepCount);
-        var interval = _interpolation.CalcStepInterval(duration, stepCount);
+        // カクつき対策（Fade 滑らか化）: 可視フレーム数を所要時間から ~20ms/フレーム
+        // （= ContinuousSendIntervalMs, ≈50fps）で算出する。従来は呼び出し側 stepCount
+        // （UI 上限 150 / 既定 20）をそのまま使っていたため、3 秒超の Fade では
+        // interval = duration / stepCount が 20ms を超え、1 色の保持が長くなって
+        // 時間方向にカクついていた。stepCount は色解像度の下限として尊重し、上限
+        // MaxInterpolationFrames で過剰送信（キュー飽和）を防ぐ。1 色の保持は最短でも
+        // ContinuousSendIntervalMs のため、送信レートは連続送信と同じ 50 回/秒 を超えない。
+        int timeBasedFrames = (int)Math.Round(duration.TotalMilliseconds / ContinuousSendIntervalMs);
+        int frames = Math.Clamp(Math.Max(stepCount, timeBasedFrames),
+                                MinInterpolationFrames, MaxInterpolationFrames);
+
+        // perceptual=true（Fade IN/OUT/Breathing）はガンマ空間で補間し、消灯付近の
+        // 知覚バンディング（カクつき）を解消する。色相遷移（SevenColor 等）は線形のまま。
+        var steps = perceptual
+            ? _interpolation.PerceptualSteps(from, to, frames)
+            : _interpolation.LinearSteps(from, to, frames);
+        var interval = _interpolation.CalcStepInterval(duration, frames);
 
         foreach (var rgb in steps)
         {

@@ -108,14 +108,14 @@ public class LightingService
             opId, channel, LightProtocol.ToHex(chCmd));
         await EnqueueDirectAsync(chCmd, highPriority, opId, ct);
 
-        await Task.Delay(2000, ct);
+        await Task.Delay(2000, ct); // FA(チャネル設定)送信後の待機 2000ms（実機で必要。文書§4.1の150msでは送信機がFA処理中にFBを取りこぼし電力が反映されない/大阪版と同値へ復帰 2026-08-13）
 
         var pwrCmd = _cmd.BuildTxSetPower(power);
         _logger.LogInformation("[{OpId}] FB 電力設定 pwr={Pwr}: {Hex}",
             opId, power, LightProtocol.ToHex(pwrCmd));
         await EnqueueDirectAsync(pwrCmd, highPriority, opId, ct);
 
-        await Task.Delay(2000, ct);
+        await Task.Delay(2000, ct); // FB(電力設定)送信後の待機 2000ms（実機で必要。文書§4.2の150msでは後続コマンドがFB処理を上書きし電力が反映されない/大阪版と同値へ復帰 2026-08-13）
 
         _logger.LogInformation("[{OpId}] 送信機初期設定完了", opId);
     }
