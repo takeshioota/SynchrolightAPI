@@ -41,6 +41,21 @@ public class EffectController(EffectRunnerService runner, SequenceRecorder recor
             Message: $"Effect started: {req.Type}"));
     }
 
+    // POST /api/effect/fade — 色→色のスムーズ遷移（サーバ側 ~50fps 補間 + 完了後ホールド）
+    [HttpPost("fade")]
+    public IActionResult Fade([FromBody] FadeRequest req)
+    {
+        runner.StartLinearFade(
+            (byte)(req.Field ?? 0x00),
+            req.From.ToRgb(),
+            req.To.ToRgb(),
+            req.DurationMs,
+            req.FadeSteps ?? 20);
+
+        return Ok(new ApiResponse(true,
+            Message: $"Fade {req.DurationMs}ms"));
+    }
+
     // POST /api/effect/stop
     [HttpPost("stop")]
     public IActionResult Stop()

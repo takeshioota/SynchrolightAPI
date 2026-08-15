@@ -149,7 +149,7 @@ public class EffectEngine
         do
         {
             await _scheduler.SendInterpolationAsync(
-                p.Field, Rgb.Black, p.Color, p.FadeSteps, duration, effectCt);
+                p.Field, Rgb.Black, p.Color, p.FadeSteps, duration, effectCt, perceptual: true);
         } while (p.Continuous && !effectCt.IsCancellationRequested);
     }
 
@@ -160,7 +160,7 @@ public class EffectEngine
         do
         {
             await _scheduler.SendInterpolationAsync(
-                p.Field, p.Color, Rgb.Black, p.FadeSteps, duration, effectCt);
+                p.Field, p.Color, Rgb.Black, p.FadeSteps, duration, effectCt, perceptual: true);
         } while (p.Continuous && !effectCt.IsCancellationRequested);
     }
 
@@ -171,9 +171,9 @@ public class EffectEngine
         do
         {
             await _scheduler.SendInterpolationAsync(
-                p.Field, Rgb.Black, p.Color, p.FadeSteps, halfDuration, effectCt);
+                p.Field, Rgb.Black, p.Color, p.FadeSteps, halfDuration, effectCt, perceptual: true);
             await _scheduler.SendInterpolationAsync(
-                p.Field, p.Color, Rgb.Black, p.FadeSteps, halfDuration, effectCt);
+                p.Field, p.Color, Rgb.Black, p.FadeSteps, halfDuration, effectCt, perceptual: true);
         } while (p.Continuous && !effectCt.IsCancellationRequested);
     }
 

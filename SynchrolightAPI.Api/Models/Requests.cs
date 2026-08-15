@@ -34,6 +34,15 @@ public record StartEffectRequest(
     bool? Continuous
 );
 
+// 色→色のスムーズ遷移（サーバ側で補間送信）。UI/シーケンス共通の堅牢フェード経路。
+public record FadeRequest(
+    ColorValue From,
+    ColorValue To,
+    int DurationMs,
+    int? FadeSteps = null,
+    int? Field = null
+);
+
 // --- Sequence ---
 public record PlaySequenceRequest(string Name);
 
@@ -47,7 +56,9 @@ public record SetChannelRequest(int Channel);
 public record SetPowerRequest(int Power);
 
 // --- Light (追加) ---
-public record RxChannelRequest(int Field, int StartRow, int Len, int Channel);
+// 受信端チャンネル設定（A6/AD）は全体ブロードキャスト固定のため ch のみ受け取る（周波数変更 3.6/3.7 訂正仕様）
+public record RxChannelRequest(int Channel);
+public record RxChannelColRequest(int Channel);
 public record BlockSectorRequest(int ProgNo, int BlockNo, ColorValue Color);
 
 // --- Internal Program (SNO夏版) ---

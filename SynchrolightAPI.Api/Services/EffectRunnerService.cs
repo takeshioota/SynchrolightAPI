@@ -138,6 +138,58 @@ public class EffectRunnerService
         _logger.LogInformation("API: カラーホールド開始 ({R},{G},{B})", color.R, color.G, color.B);
     }
 
+    /// <summary>
+    /// from→to へ duration かけて線形補間フェードし、完了後は to を連続送信で保持する。
+    /// 実行中のエフェクト/シーケンスは自動停止。色→色のスムーズ遷移（UI/シーケンス共通の堅牢経路）に使用。
+    /// SendInterpolationAsync により ~20ms/フレーム(≈50fps) で送信し、各フレーム保持中も再送するため
+    /// パケットロスに強い。旧来の「30ms・1発送信」方式のカクつき/不安定を解消するための統一実装。
+    /// </summary>
+    public void StartLinearFade(byte field, Rgb from, Rgb to, int durationMs, int stepCount)
+    {
+        lock (_lock)
+        {
+            StopSequenceInternal();
+            StopEffectInternal();
+
+            var cts = new CancellationTokenSource();
+            _effectCts = cts;
+            _currentEffect = null;
+
+            _effectTask = Task.Run(async () =>
+            {
+                try
+                {
+                    var effectCt = _scheduler.BeginEffect(cts.Token);
+                    await _scheduler.SendInterpolationAsync(
+                        field, from, to, stepCount,
+                        TimeSpan.FromMilliseconds(Math.Max(1, durationMs)), effectCt);
+                    // 遷移完了後は最終色を確実に発色させ、以後は連続送信で保持（セルフモード突入防止）。
+                    await _scheduler.LatchColorHighPriorityAsync(field, to, effectCt);
+                    await _scheduler.ContinuousSendWithoutResetAsync(field, to, effectCt);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "リニアフェードタスク異常終了");
+                }
+                finally
+                {
+                    lock (_lock)
+                    {
+                        if (_effectCts == cts)
+                        {
+                            _currentEffect = null;
+                            _effectTask = null;
+                        }
+                    }
+                }
+            });
+        }
+
+        _logger.LogInformation("API: リニアフェード開始 ({FR},{FG},{FB})→({TR},{TG},{TB}) {Ms}ms",
+            from.R, from.G, from.B, to.R, to.G, to.B, durationMs);
+    }
+
     /// <summary>任意パケットを連続送信する。実行中のエフェクト/シーケンスは自動停止。</summary>
     public void StartPacketHold(byte[] packet)
     {

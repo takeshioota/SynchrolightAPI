@@ -163,15 +163,24 @@ public class LightController(ICommandBuilder cmd, ITransport transport, Sequence
             Message: $"A1 Sequence play frame={req.FrameNo}"));
     }
 
-    // POST /api/light/rx-channel — A6
+    // POST /api/light/rx-channel — A6（前後分区・行 / 周波数変更 3.6・全体ブロードキャスト）
     [HttpPost("rx-channel")]
     public async Task<IActionResult> RxChannel([FromBody] RxChannelRequest req, CancellationToken ct)
     {
-        var packet = LightProtocol.BuildA6_SetRxChannel(
-            (byte)req.Field, (ushort)req.StartRow, (byte)req.Len, (byte)req.Channel);
+        var packet = LightProtocol.BuildA6_SetRxChannel((byte)req.Channel);
         await transport.EnqueueAsync(packet, ct);
         return Ok(new ApiResponse(true,
-            Message: $"A6 SetRxChannel ch={req.Channel} rows {req.StartRow}-{req.StartRow + req.Len - 1}"));
+            Message: $"A6 SetRxChannel ch={req.Channel} (場次=00 開始行=FFFF 長さ=01)"));
+    }
+
+    // POST /api/light/rx-channel-col — AD（左右分区・列 / 周波数変更 3.7・全体ブロードキャスト）
+    [HttpPost("rx-channel-col")]
+    public async Task<IActionResult> RxChannelCol([FromBody] RxChannelColRequest req, CancellationToken ct)
+    {
+        var packet = LightProtocol.BuildAD_SetRxChannel((byte)req.Channel);
+        await transport.EnqueueAsync(packet, ct);
+        return Ok(new ApiResponse(true,
+            Message: $"AD SetRxChannel ch={req.Channel} (場次=00 開始列=FFFF 長さ=01)"));
     }
 
     // POST /api/light/block-sector — AE
