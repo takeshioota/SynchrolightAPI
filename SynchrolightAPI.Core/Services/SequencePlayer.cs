@@ -416,10 +416,40 @@ public class SequencePlayer
         {
             int colorCount = Math.Max(1, colors.Length);
 
-            // Step 1: カラーパレット送信（0xA9 0x02）
+            // モード別パケット生成（初回ラッチとループで共用）
+            byte[] BuildModePacket(byte frame) => mode switch
+            {
+                0 => LightProtocol.BuildA9_RainbowSolid(frame),
+                1 => LightProtocol.BuildA9_RainbowBlink(
+                         frame,
+                         (ushort)Math.Clamp(blinkPeriodMs ?? 500, 100, 3600),
+                         (byte)Math.Clamp(dutyRatio ?? 5, 1, 9)),
+                2 => LightProtocol.BuildA9_RainbowFadeInOut(
+                         frame,
+                         (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000),
+                         (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
+                3 => LightProtocol.BuildA9_RainbowFadeIn(
+                         frame,
+                         (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000)),
+                4 => LightProtocol.BuildA9_RainbowFadeOut(
+                         frame,
+                         (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
+                5 => LightProtocol.BuildA9_RainbowRandom(frame),
+                _ => LightProtocol.BuildA9_RainbowSolid(frame),
+            };
+
+            // BUG-20260823-01: 新Rainbow開始時に前エフェクトの残色が一瞬光る不具合の対策（一括再生経路）。
+            // EffectRunnerService.RunRainbowLoopAsync と同じく、パレットと先頭フレームを高優先で送出し
+            // 残フレームを飛び越えて即座に新色へ上書きする。
+            var highPriority = new SendOptions(HighPriority: true, RetransmitCount: 2);
+
+            // Step 1: カラーパレット送信（0xA9 0x02）— 高優先で確実に先着させる
             var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(colors);
-            await _transport.EnqueueAsync(colorSetupPacket, SendOptions.Default, effectCt);
+            await _transport.EnqueueAsync(colorSetupPacket, highPriority, effectCt);
             await Task.Delay(50, effectCt); // パレット設定の反映待ち
+
+            // 先頭フレーム(0)を高優先で1発ラッチし、保持されている旧色を確定的に上書きする
+            await _transport.EnqueueAsync(BuildModePacket(0), highPriority, effectCt);
 
             // Step 2: モード別コマンドを colorFrameNo サイクルしながら継続送信
             var sw = Stopwatch.StartNew();
@@ -432,28 +462,7 @@ public class SequencePlayer
                     currentFrame = (byte)(elapsed / cycleDurationMs % colorCount);
                 }
 
-                byte[] packet = mode switch
-                {
-                    0 => LightProtocol.BuildA9_RainbowSolid(currentFrame),
-                    1 => LightProtocol.BuildA9_RainbowBlink(
-                             currentFrame,
-                             (ushort)Math.Clamp(blinkPeriodMs ?? 500, 100, 3600),
-                             (byte)Math.Clamp(dutyRatio ?? 5, 1, 9)),
-                    2 => LightProtocol.BuildA9_RainbowFadeInOut(
-                             currentFrame,
-                             (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000),
-                             (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
-                    3 => LightProtocol.BuildA9_RainbowFadeIn(
-                             currentFrame,
-                             (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000)),
-                    4 => LightProtocol.BuildA9_RainbowFadeOut(
-                             currentFrame,
-                             (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
-                    5 => LightProtocol.BuildA9_RainbowRandom(currentFrame),
-                    _ => LightProtocol.BuildA9_RainbowSolid(currentFrame),
-                };
-
-                await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
+                await _transport.EnqueueAsync(BuildModePacket(currentFrame), SendOptions.Default, effectCt);
                 await Task.Delay(20, effectCt); // 20ms 間隔
             }
         }
