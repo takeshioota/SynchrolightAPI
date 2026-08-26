@@ -379,17 +379,41 @@ public class EffectRunnerService
         // 先頭フレーム(0)を高優先で1発ラッチし、保持されている旧色を確定的に上書きする
         await _transport.EnqueueAsync(BuildModePacket(0), highPriority, effectCt);
 
+        // BUG(FI/FO光はじめ不定): FI/FO 系で「色切替間隔 < フェード時間」だと、フェード進行中に
+        // colorFrameNo が進み端末がフェード途中で次色へ強制遷移するため、毎回不定の位相でフェードが
+        // 始まり「光はじめが一定でない」不具合になる（遅いフェード設定ほど顕著）。
+        // 仕様3.18注記3「フレーム移行時間はフェード時間以上（未満禁止）」に従い、色切替間隔を
+        // フェード包絡長以上へクランプする（フェード値は BuildModePacket と同じ 256-3000ms で評価）。
+        int fiMs = Math.Clamp(fadeInMs ?? 1000, 256, 3000);
+        int foMs = Math.Clamp(fadeOutMs ?? 1000, 256, 3000);
+        int minCycleMs = mode switch
+        {
+            2 => fiMs + foMs, // FadeInOut: フェードイン＋フェードアウトで1周期
+            3 => fiMs,        // FadeIn
+            4 => foMs,        // FadeOut
+            _ => 0,           // Solid/Blink/Random は対象外
+        };
+        int effectiveCycleMs = (cycleDurationMs > 0 && minCycleMs > 0)
+            ? Math.Max(cycleDurationMs, minCycleMs)
+            : cycleDurationMs;
+        if (effectiveCycleMs != cycleDurationMs)
+        {
+            _logger.LogInformation(
+                "Rainbow FI/FO: 色切替間隔を {Req}ms → {Eff}ms にクランプ（フェード時間以上, 仕様3.18注記3）",
+                cycleDurationMs, effectiveCycleMs);
+        }
+
         // Step 2: モード別コマンドを colorFrameNo サイクルしながら継続送信
         var sw = System.Diagnostics.Stopwatch.StartNew();
         byte currentFrame = 0;
 
         while (!effectCt.IsCancellationRequested)
         {
-            // colorFrameNo を cycleDurationMs ごとに進める
-            if (cycleDurationMs > 0)
+            // colorFrameNo を effectiveCycleMs ごとに進める（FI/FO はフェード時間以上に補正済み）
+            if (effectiveCycleMs > 0)
             {
                 var elapsed = sw.ElapsedMilliseconds;
-                currentFrame = (byte)(elapsed / cycleDurationMs % colorCount);
+                currentFrame = (byte)(elapsed / effectiveCycleMs % colorCount);
             }
 
             await _transport.EnqueueAsync(BuildModePacket(currentFrame), effectCt);
