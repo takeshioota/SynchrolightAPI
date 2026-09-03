@@ -360,7 +360,7 @@ public class SequencePlayer
                     var rainbowTask = RunRainbowLoopAsync(
                         mode, rbColors, cycle,
                         step.RainbowBlinkPeriodMs, step.RainbowDutyRatio,
-                        step.RainbowFadeInMs, step.RainbowFadeOutMs, effectCt);
+                        step.RainbowFadeInMs, step.RainbowFadeOutMs, step.Field, effectCt);
                     _pendingContinuousEffectTask = rainbowTask;
                     _logger.LogDebug("SEQ: Rainbow mode={Mode} colors={N} cycle={Cycle}ms at {Time}ms",
                         mode, rbColors.Length, cycle, step.TimeOffsetMs);
@@ -410,6 +410,7 @@ public class SequencePlayer
         int? dutyRatio,
         int? fadeInMs,
         int? fadeOutMs,
+        byte field,
         CancellationToken effectCt)
     {
         try
@@ -443,6 +444,14 @@ public class SequencePlayer
             // 残フレームを飛び越えて即座に新色へ上書きする。
             var highPriority = new SendOptions(HighPriority: true, RetransmitCount: 2);
 
+            // BUG-20260901-04: Flash→Rainbow 遷移で、Flashピーク色が端末にラッチされたまま
+            // 下の「パレット反映待ち(50ms)」の間 残り「一瞬フリーズ＋前色残り」に見える不具合の対策。
+            // パレット送信の前に高優先の黒(消灯)を1発入れ、端末が保持中の残色を即座に打ち消す。
+            // これにより 50ms 窓は「前色ラッチ」→「一瞬の暗転」となり、エフェクト間の自然な遷移になる。
+            // field は当該ステップの場次に合わせる（前ステップの点灯色と同じ場次で上書きするため）。
+            await _transport.EnqueueAsync(
+                LightProtocol.BuildA2_GlobalColor(field, 0, 0, 0), highPriority, effectCt);
+
             // Step 1: カラーパレット送信（0xA9 0x02）— 高優先で確実に先着させる
             var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(colors);
             await _transport.EnqueueAsync(colorSetupPacket, highPriority, effectCt);
@@ -475,20 +484,55 @@ public class SequencePlayer
                     cycleDurationMs, effectiveCycleMs);
             }
 
-            // Step 2: モード別コマンドを colorFrameNo サイクルしながら継続送信
+            // Step 2: モード別コマンドを送信する。
+            // BUG-20260903-01/03 対策で送信方式を再設計:
+            //   旧実装は同一 A9 03 を 20ms 毎(=約50回/秒)連投していたため、
+            //     ・端末の受信/描画バッファを飽和させ 30〜40秒後に色循環が加速する（BUG-01）
+            //     ・色替えが 20ms 境界に量子化され FI/FO にズレが出る（BUG-03）
+            //   新実装は「フレーム変化時のみ、周期境界の正確な瞬間に送信」＋
+            //   「RainbowRefreshMs 間隔の低レート維持送信」（セルフモード防止・RF欠落補償）とする。
+            //   これによりパケット量を大幅削減（cycle=1000ms で約50→約2回/秒）しつつ色替えを正確化する。
+            const int RainbowRefreshMs = 500; // 維持送信間隔（実機で調整可）
             var sw = Stopwatch.StartNew();
-            byte currentFrame = 0;
+            byte lastFrame = 0;               // 先頭フレーム(0)は上で高優先ラッチ済み
+            long lastSendMs = 0;
+            long framesChanged = 0, packetsSent = 0, lastSummaryMs = 0;
+            var changeOpts = new SendOptions(RetransmitCount: 2); // 色替え瞬間の到達信頼性
             while (!effectCt.IsCancellationRequested)
             {
-                // colorFrameNo を effectiveCycleMs ごとに進める（FI/FO はフェード時間以上に補正済み）
-                if (effectiveCycleMs > 0)
+                long now = sw.ElapsedMilliseconds;
+                byte target = effectiveCycleMs > 0
+                    ? LightProtocol.RainbowFrameAt(now, effectiveCycleMs, colorCount)
+                    : lastFrame;
+
+                if (target != lastFrame)
                 {
-                    var elapsed = sw.ElapsedMilliseconds;
-                    currentFrame = (byte)(elapsed / effectiveCycleMs % colorCount);
+                    // 周期境界を跨いだ瞬間に、次フレームを再送付きで正確に送る
+                    await _transport.EnqueueAsync(BuildModePacket(target), changeOpts, effectCt);
+                    lastFrame = target; lastSendMs = now; framesChanged++; packetsSent++;
+                    _logger.LogDebug("SEQ Rainbow frame→{Frame} at {Elapsed}ms", target, now);
+                }
+                else if (now - lastSendMs >= RainbowRefreshMs)
+                {
+                    // 変化が無い間は低レートで同一フレームを維持送信（セルフモード防止・欠落補償）
+                    await _transport.EnqueueAsync(BuildModePacket(lastFrame), SendOptions.Default, effectCt);
+                    lastSendMs = now; packetsSent++;
                 }
 
-                await _transport.EnqueueAsync(BuildModePacket(currentFrame), SendOptions.Default, effectCt);
-                await Task.Delay(20, effectCt); // 20ms 間隔
+                // 10秒ごとに送信要約（BUG-01の実機切り分け＝PC側送信が終始一定であることの確認用）
+                if (now - lastSummaryMs >= 10_000)
+                {
+                    _logger.LogInformation(
+                        "SEQ Rainbow 送信要約: 経過={Sec}s, フレーム変化={Frames}, 送信パケット={Packets}, cycle={Cycle}ms",
+                        now / 1000, framesChanged, packetsSent, effectiveCycleMs);
+                    lastSummaryMs = now;
+                }
+
+                // 「次の周期境界」か「次の維持送信」の早い方まで眠る（最小5ms・キャンセルは即時throw）
+                long toNextFrame = effectiveCycleMs > 0 ? effectiveCycleMs - (now % effectiveCycleMs) : RainbowRefreshMs;
+                long toRefresh = RainbowRefreshMs - (now - lastSendMs);
+                int sleep = (int)Math.Max(5, Math.Min(toNextFrame, toRefresh));
+                await Task.Delay(sleep, effectCt);
             }
         }
         catch (OperationCanceledException) { /* 次操作への遷移／停止による正常キャンセル */ }

@@ -32,6 +32,24 @@ public static class LightProtocol
     }
 
     // ----------------------------
+    // レインボー：色フレーム番号（純関数）
+    // ----------------------------
+
+    /// <summary>
+    /// レインボーの colorFrameNo を「経過時間の純関数」として算出する。
+    /// frame = (elapsedMs / effectiveCycleMs) % colorCount。
+    /// 色替えの間隔は壁時計時間に完全に固定される（送信ループのジッタや負荷の影響を受けない）。
+    /// ＝ PC 側では色循環が速くなり得ないことを保証する不変条件（BUG-20260903-01 の切り分け根拠）。
+    /// effectiveCycleMs&lt;=0 または colorCount&lt;=0 のときは 0 を返す。
+    /// </summary>
+    public static byte RainbowFrameAt(long elapsedMs, int effectiveCycleMs, int colorCount)
+    {
+        if (effectiveCycleMs <= 0 || colorCount <= 0) return 0;
+        if (elapsedMs < 0) elapsedMs = 0;
+        return (byte)(elapsedMs / effectiveCycleMs % colorCount);
+    }
+
+    // ----------------------------
     // 送信機設定：FA / FB（4バイト）
     // ----------------------------
 
