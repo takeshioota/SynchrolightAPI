@@ -305,6 +305,18 @@ public class EffectScheduler
     {
         lock (_lock)
         {
+            // BUG-20260902-01（所有権ガード）: 既にキャンセル済みの outerCt で入ってくるのは、
+            // 停止された古い操作（再生中シーケンスが撒いた fire-and-forget のエフェクト/連続送信タスク等）が
+            // unwind 途中にスケジューラへ再入したケース。ここで現行 _activeCts を無条件に横取りキャンセルすると、
+            // 再生停止直後に張り直した色ホールド（StartColorHold の 20ms 連続送信）まで殺してしまい、
+            // 連続送信が途切れて端末が 1〜3 秒後にセルフモードへ落ち消灯する（＝再生停止後に数秒で消灯）。
+            // 正規の新規操作は必ず live な outerCt で始まるため、cancelled な場合は現行操作を尊重して
+            // _activeCts には一切触れず、呼び出し元にはキャンセル済みトークンを返して即座に打ち切らせる。
+            if (outerCt.IsCancellationRequested)
+            {
+                _logger.LogDebug("ResetActiveOperation: outerCt が既にキャンセル済み（stale 再入）→ 現行操作を保護し no-op");
+                return CancellationTokenSource.CreateLinkedTokenSource(outerCt); // 既にキャンセル状態
+            }
             if (_activeCts != null)
             {
                 _activeCts.Cancel();
