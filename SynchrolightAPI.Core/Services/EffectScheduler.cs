@@ -56,6 +56,34 @@ public class EffectScheduler
         _logger = logger;
     }
 
+    // ─── 停止時の「現在の光度」保持（20260904）───────────────────────────
+    // フェード等のエフェクトは本スケジューラが 1 フレームずつ A2(単色) を送出する。
+    // 停止した瞬間に表示されていた色（＝直近に送出した A2 色）を記録しておき、UI 側が
+    // 停止時にこの色で保持することで「停止時の光度をキープ」を実現する（設定色フルへ跳ねない）。
+    private readonly object _lastColorLock = new();
+    private (byte field, Rgb color)? _lastColor;
+
+    /// <summary>直近に送出した単色(A2)を取得する。未送出なら false。</summary>
+    public bool TryGetLastColor(out byte field, out Rgb color)
+    {
+        lock (_lastColorLock)
+        {
+            if (_lastColor.HasValue)
+            {
+                (field, color) = _lastColor.Value;
+                return true;
+            }
+        }
+        field = 0;
+        color = Rgb.Black;
+        return false;
+    }
+
+    private void RecordLastColor(byte field, Rgb color)
+    {
+        lock (_lastColorLock) { _lastColor = (field, color); }
+    }
+
     /// <summary>
     /// 新しいエフェクト操作を開始する。
     /// 実行中の操作があれば自動キャンセル＋キューフラッシュを行う。
@@ -110,6 +138,7 @@ public class EffectScheduler
     public async Task SendFrameAsync(byte field, Rgb color, CancellationToken effectCt)
     {
         effectCt.ThrowIfCancellationRequested();
+        RecordLastColor(field, color);
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
         await _transport.EnqueueAsync(packet, SendOptions.Default, effectCt);
     }
@@ -131,6 +160,7 @@ public class EffectScheduler
     public async Task LatchColorHighPriorityAsync(byte field, Rgb color, CancellationToken effectCt)
     {
         effectCt.ThrowIfCancellationRequested();
+        RecordLastColor(field, color);
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
         var options = new SendOptions(HighPriority: true, RetransmitCount: 2);
         await _transport.EnqueueAsync(packet, options, effectCt);
@@ -144,6 +174,7 @@ public class EffectScheduler
     public async Task SendFrameForDurationAsync(
         byte field, Rgb color, TimeSpan holdDuration, CancellationToken effectCt)
     {
+        RecordLastColor(field, color);
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
         var sw = Stopwatch.StartNew();
         while (sw.Elapsed < holdDuration)
@@ -172,6 +203,7 @@ public class EffectScheduler
     {
         var onPacket = LightProtocol.BuildA2_GlobalColor(field, onColor.R, onColor.G, onColor.B);
         var offPacket = LightProtocol.BuildA2_GlobalColor(field, 0, 0, 0);
+        var offColor = new Rgb(0, 0, 0);
         var intervalMs = (long)interval.TotalMilliseconds;
         if (intervalMs <= 0) intervalMs = 1;
 
@@ -195,6 +227,7 @@ public class EffectScheduler
             var nextToggleMs = (toggleCount + 1) * intervalMs;
 
             var packet = isOn ? onPacket : offPacket;
+            RecordLastColor(field, isOn ? onColor : offColor);
             // Deadline を毎回更新（エンキュー時点からの相対期限とするため）
             var options = flashSendOptions with { Deadline = DateTimeOffset.UtcNow.AddMilliseconds(50) };
             await _transport.EnqueueAsync(packet, options, effectCt);
@@ -216,6 +249,7 @@ public class EffectScheduler
         _logger.LogDebug("SendContinuousColorAsync: 連続カラー送信開始 ({R},{G},{B})", color.R, color.G, color.B);
         var effectCt = BeginEffect(outerCt);
 
+        RecordLastColor(field, color);
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
         while (!effectCt.IsCancellationRequested)
         {
@@ -232,6 +266,7 @@ public class EffectScheduler
     public async Task ContinuousSendWithoutResetAsync(
         byte field, Rgb color, CancellationToken effectCt)
     {
+        RecordLastColor(field, color);
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
         while (!effectCt.IsCancellationRequested)
         {
@@ -279,6 +314,7 @@ public class EffectScheduler
     {
         _logger.LogDebug("SendColorAsync: 即時カラー送信 ({R},{G},{B})", color.R, color.G, color.B);
         ResetActiveOperation(outerCt);
+        RecordLastColor(field, color);
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
         await _transport.EnqueueAsync(packet, SendOptions.Default, outerCt);
     }

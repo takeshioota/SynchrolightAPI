@@ -416,6 +416,9 @@ public class SequencePlayer
         try
         {
             int colorCount = Math.Max(1, colors.Length);
+            // フェード包絡を持つモード（FI/FO=2, FadeIn=3, FadeOut=4）。
+            // これらは A9 03 を再送すると端末のフェード包絡が途中でリスタートするため、維持送信の扱いを変える。
+            bool isFadeMode = mode is 2 or 3 or 4;
 
             // モード別パケット生成（初回ラッチとループで共用）
             byte[] BuildModePacket(byte frame) => mode switch
@@ -514,8 +517,13 @@ public class SequencePlayer
                 }
                 else if (now - lastSendMs >= RainbowRefreshMs)
                 {
-                    // 変化が無い間は低レートで同一フレームを維持送信（セルフモード防止・欠落補償）
-                    await _transport.EnqueueAsync(BuildModePacket(lastFrame), SendOptions.Default, effectCt);
+                    // 変化が無い間は低レートで維持送信（セルフモード防止・RF欠落補償）。
+                    // BUG-20260903-03(No.12)再発対策: FI/FO・FadeIn・FadeOut では、ここで A9 03 を再送すると
+                    // 端末のフェード包絡が途中でリスタートし、点灯タイミングが 500ms 周期でズレて見える
+                    // （Solid/Flash は包絡が無いため無害）。フェード系は「表示を変えない」A9 02(パレット)で
+                    // 維持送信し、セルフモード防止だけ行って包絡を乱さない。
+                    var keepAlivePacket = isFadeMode ? colorSetupPacket : BuildModePacket(lastFrame);
+                    await _transport.EnqueueAsync(keepAlivePacket, SendOptions.Default, effectCt);
                     lastSendMs = now; packetsSent++;
                 }
 

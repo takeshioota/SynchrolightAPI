@@ -65,6 +65,24 @@ public class EffectController(EffectRunnerService runner, SequenceRecorder recor
         return Ok(new ApiResponse(true, Message: "Effect stopped"));
     }
 
+    // GET /api/effect/current-color — 直近に送出した単色（フェード停止時の「現在の光度」保持用, 20260904）
+    [HttpGet("current-color")]
+    public IActionResult CurrentColor()
+    {
+        if (runner.TryGetCurrentColor(out var field, out var color))
+        {
+            return Ok(new ApiResponse(true, Data: new
+            {
+                hasColor = true,
+                field,
+                color.R,
+                color.G,
+                color.B
+            }));
+        }
+        return Ok(new ApiResponse(true, Data: new { hasColor = false }));
+    }
+
     // GET /api/effect/status
     [HttpGet("status")]
     public IActionResult Status()

@@ -66,35 +66,75 @@ public class MultiPortTransport : ITransport, IDisposable
         }
     }
 
+    // BUG-20260904-02(No.14): 高負荷/VM 環境で SerialPort.GetPortNames()（レジストリ列挙）が
+    // 一時的に空／不完全を返すことがあり、開いているポートが一斉に「消失」と誤検知されて
+    // 全ポート切断→再接続が走り、信号が数秒途切れる（端末はセルフモードに落ちて消灯）。
+    // 単発のグリッチで切断扱いしないよう、(1) 列挙が空ならこのパスをスキップし、
+    // (2) 各ポートは連続 MissingThreshold 回消えて初めて切断扱いにする（デバウンス）。
+    // ※実際にケーブルが抜けている場合、送信中は Write 例外で即検出されるため本デバウンスの影響は
+    //   「待機中の抜線検出が最大 MissingThreshold×チェック間隔ぶん遅れる」だけで実害は無い。
+    private const int MissingThreshold = 3; // PortHealthMonitor の 5 秒間隔 × 3 ≒ 15 秒 連続消失で確定
+    private readonly Dictionary<string, int> _missingStreak = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// 物理的に存在しなくなった（USB 抜去等で OS のポート一覧から消えた）オープン中ポートを
     /// 検出し、切断済みとしてクローズする。SerialPort.IsOpen は USB 抜去後も true のまま残る
     /// ため、OS のポート一覧（SerialPort.GetPortNames）と突き合わせて死活を判定する。
     /// 待機中（送信が無く Write 例外による検出が働かない状態）でも切断を検知するためのハートビート。
     /// PortHealthMonitor から定期的に呼び出される。
+    /// 高負荷時の列挙グリッチによる誤検知を避けるため、空応答スキップ＋連続消失デバウンスを行う。
     /// </summary>
     internal void ReconcilePhysicalPorts()
     {
         string[] available;
         try { available = SerialPort.GetPortNames(); }
         catch { return; }
-        var availableSet = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
 
-        List<SerialPort> vanished;
+        List<SerialPort> openPorts;
         lock (_lock)
         {
-            vanished = _ports
-                .Where(p => p.IsOpen && !availableSet.Contains(p.PortName))
-                .ToList();
+            openPorts = _ports.Where(p => p.IsOpen).ToList();
+        }
+        if (openPorts.Count == 0) return;
+
+        // グリッチ保護: 開いているポートがあるのに列挙が空を返した場合は、ケーブル一斉抜けではなく
+        // 高負荷によるレジストリ列挙の一時的失敗とみなし、このパスでは何もしない（切断扱いしない）。
+        if (available.Length == 0)
+        {
+            _logger.LogDebug("GetPortNames が空を返却（高負荷による一時的な列挙失敗とみなしスキップ）。");
+            return;
         }
 
-        foreach (var sp in vanished)
+        var availableSet = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var sp in openPorts)
         {
+            if (availableSet.Contains(sp.PortName))
+            {
+                // 見えている → ストリークをリセット（過去の一時的不在を打ち消す）
+                _missingStreak.Remove(sp.PortName);
+                continue;
+            }
+
+            _missingStreak.TryGetValue(sp.PortName, out var streak);
+            streak++;
+            _missingStreak[sp.PortName] = streak;
+
+            if (streak < MissingThreshold)
+            {
+                // まだ確定しない（単発／短時間のグリッチ耐性）。次パスで復帰すればリセットされる。
+                _logger.LogDebug(
+                    "ポート {PortName} が OS 一覧に一時的に不在（{Streak}/{Threshold}）。デバウンス中で切断扱いにしません。",
+                    sp.PortName, streak, MissingThreshold);
+                continue;
+            }
+
             _logger.LogWarning(
-                "ポート {PortName} が OS のポート一覧から消失（ケーブル抜け等）。切断としてマークします。",
-                sp.PortName);
+                "ポート {PortName} が OS のポート一覧から {Threshold} 回連続で消失（ケーブル抜け等）。切断としてマークします。",
+                sp.PortName, MissingThreshold);
             SetLastError($"{sp.PortName}: disconnected (cable removed)");
             MarkPortDisconnected(sp.PortName);
+            _missingStreak.Remove(sp.PortName);
         }
     }
 
