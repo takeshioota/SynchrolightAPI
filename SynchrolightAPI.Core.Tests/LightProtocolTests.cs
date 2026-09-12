@@ -344,6 +344,33 @@ public class LightProtocolTests
         => Assert.Throws<ArgumentException>(
             () => LightProtocol.BuildA9_SetRainbowColors(new (byte, byte, byte)[n]));
 
+    // 仕様3.18-3.20 FI/FO 系: RGB 最小 25・最大 255（0x19〜0xFF）
+    [Fact]
+    public void ClampRainbowFadeColors_下限25未満は25に引き上げる()
+    {
+        var colors = new (byte, byte, byte)[]
+        {
+            (0, 0, 0),        // 全成分 0 → 全成分 25
+            (24, 25, 26),     // 24→25 / 25据置 / 26据置
+            (255, 100, 1),    // 255据置 / 100据置 / 1→25
+        };
+        var clamped = LightProtocol.ClampRainbowFadeColors(colors);
+        Assert.Equal(((byte)25, (byte)25, (byte)25), clamped[0]);
+        Assert.Equal(((byte)25, (byte)25, (byte)26), clamped[1]);
+        Assert.Equal(((byte)255, (byte)100, (byte)25), clamped[2]);
+    }
+
+    [Fact]
+    public void ClampRainbowFadeColors_25以上は変更しない_元配列は不変()
+    {
+        var colors = new (byte, byte, byte)[] { (25, 128, 255) };
+        var clamped = LightProtocol.ClampRainbowFadeColors(colors);
+        Assert.Equal(((byte)25, (byte)128, (byte)255), clamped[0]);
+        // 元配列は変更されない（新しい配列を返す）
+        Assert.Equal(((byte)25, (byte)128, (byte)255), colors[0]);
+        Assert.NotSame(colors, clamped);
+    }
+
     [Fact]
     public void BuildA9_RainbowSolid_常時点灯()
     {
