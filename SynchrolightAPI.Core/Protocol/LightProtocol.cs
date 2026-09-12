@@ -475,6 +475,34 @@ public static class LightProtocol
     }
 
     /// <summary>
+    /// レインボー FI/FO 系（3.18 FI/FO ・3.19 FI ・3.20 FO ／ A9 03 mode=0x02・0x03・0x04）の
+    /// RGB 各成分の最小設定値（0x19 = 25）。仕様: これらフェード包絡モードでは RGB は 25〜255
+    /// （0x19〜0xFF）の範囲で設定する。上限は byte の上限（255）と一致するため実質的に下限のみ効く。
+    /// 常時点灯／点滅／ランダム（3.16/3.17/3.21）は 0 を許容するため対象外。
+    /// </summary>
+    public const byte RainbowFadeRgbMin = 25;
+
+    /// <summary>
+    /// レインボー FI/FO 系（3.18-3.20）のパレット色を、仕様の RGB 範囲 25〜255（0x19〜0xFF）に
+    /// クランプした新しい配列を返す。各成分が 25 未満（0 を含む）の場合は 25 に引き上げる。
+    /// 元の配列・要素は変更しない。
+    /// </summary>
+    public static (byte r, byte g, byte b)[] ClampRainbowFadeColors((byte r, byte g, byte b)[] colors)
+    {
+        if (colors == null) return colors!;
+
+        var result = new (byte r, byte g, byte b)[colors.Length];
+        for (int i = 0; i < colors.Length; i++)
+        {
+            result[i] = (
+                colors[i].r < RainbowFadeRgbMin ? RainbowFadeRgbMin : colors[i].r,
+                colors[i].g < RainbowFadeRgbMin ? RainbowFadeRgbMin : colors[i].g,
+                colors[i].b < RainbowFadeRgbMin ? RainbowFadeRgbMin : colors[i].b);
+        }
+        return result;
+    }
+
+    /// <summary>
     /// A9 0x03 mode=0x00: レインボー常時点灯（3.16）
     /// フォーマット: A9 03 00 colorFrameNo [0埋め] cs
     /// </summary>
