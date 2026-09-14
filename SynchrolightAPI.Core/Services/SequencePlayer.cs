@@ -426,18 +426,18 @@ public class SequencePlayer
                 0 => LightProtocol.BuildA9_RainbowSolid(frame),
                 1 => LightProtocol.BuildA9_RainbowBlink(
                          frame,
-                         (ushort)Math.Clamp(blinkPeriodMs ?? 500, 100, 3600),
+                         (ushort)Math.Clamp(blinkPeriodMs ?? 500, 10, 5000),
                          (byte)Math.Clamp(dutyRatio ?? 5, 1, 9)),
                 2 => LightProtocol.BuildA9_RainbowFadeInOut(
                          frame,
-                         (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000),
-                         (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
+                         (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 5000),
+                         (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 5000)),
                 3 => LightProtocol.BuildA9_RainbowFadeIn(
                          frame,
-                         (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 3000)),
+                         (ushort)Math.Clamp(fadeInMs ?? 1000, 256, 5000)),
                 4 => LightProtocol.BuildA9_RainbowFadeOut(
                          frame,
-                         (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 3000)),
+                         (ushort)Math.Clamp(fadeOutMs ?? 1000, 256, 5000)),
                 5 => LightProtocol.BuildA9_RainbowRandom(frame),
                 _ => LightProtocol.BuildA9_RainbowSolid(frame),
             };
@@ -470,9 +470,9 @@ public class SequencePlayer
             // colorFrameNo が進み端末がフェード途中で次色へ強制遷移するため、毎回不定の位相でフェードが
             // 始まり「光はじめが一定でない」不具合になる（遅いフェード設定ほど顕著）。
             // 仕様3.18注記3「フレーム移行時間はフェード時間以上（未満禁止）」に従い、色切替間隔を
-            // フェード包絡長以上へクランプする（フェード値は BuildModePacket と同じ 256-3000ms で評価）。
-            int fiMs = Math.Clamp(fadeInMs ?? 1000, 256, 3000);
-            int foMs = Math.Clamp(fadeOutMs ?? 1000, 256, 3000);
+            // フェード包絡長以上へクランプする（フェード値は BuildModePacket と同じ 256-5000ms で評価。仕様書V4.7で上限3000→5000）。
+            int fiMs = Math.Clamp(fadeInMs ?? 1000, 256, 5000);
+            int foMs = Math.Clamp(fadeOutMs ?? 1000, 256, 5000);
             int minCycleMs = mode switch
             {
                 2 => fiMs + foMs, // FadeInOut: フェードイン＋フェードアウトで1周期
