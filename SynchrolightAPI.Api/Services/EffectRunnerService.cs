@@ -382,10 +382,9 @@ public class EffectRunnerService
             LightProtocol.BuildA2_GlobalColor(0x01, 0, 0, 0), highPriority, effectCt);
 
         // Step 1: カラーパレット送信（0xA9 0x02）— 高優先で確実に先着させる
-        // 仕様3.18-3.20: FI/FO 系（mode 2/3/4）は RGB 最小 25・最大 255（0x19〜0xFF）。
-        // パレット送出前に各成分を下限 25 にクランプする（他モードは 0 を許容するため非対象）。
-        var paletteColors = isFadeMode ? LightProtocol.ClampRainbowFadeColors(colors) : colors;
-        var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(paletteColors);
+        // 仕様V4.9(3.18-3.20): FI/FO 系も RGB は 0〜255。下限クランプは行わず素通しする
+        // （V4.8/V4.9 で「最小25」は誤記・実際は最小0 と訂正されたため）。
+        var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(colors);
         await _transport.EnqueueAsync(colorSetupPacket, highPriority, effectCt);
         await Task.Delay(50, effectCt); // パレット設定の反映待ち
 
