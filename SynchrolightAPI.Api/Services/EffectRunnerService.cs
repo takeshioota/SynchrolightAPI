@@ -139,10 +139,11 @@ public class EffectRunnerService
     }
 
     /// <summary>
-    /// from→to へ duration かけて線形補間フェードし、完了後は to を連続送信で保持する。
-    /// 実行中のエフェクト/シーケンスは自動停止。色→色のスムーズ遷移（UI/シーケンス共通の堅牢経路）に使用。
+    /// from→to へ duration かけてクロスフェードし、完了後は to を連続送信で保持する。
+    /// 実行中のエフェクト/シーケンスは自動停止。色→色のスムーズ遷移（UI の OL / Color 遷移共通の堅牢経路）に使用。
     /// SendInterpolationAsync により ~20ms/フレーム(≈50fps) で送信し、各フレーム保持中も再送するため
     /// パケットロスに強い。旧来の「30ms・1発送信」方式のカクつき/不安定を解消するための統一実装。
+    /// BUG-20260923-01: 補間は鮮やかさ保持＋輝度保持で行い、輝度沈みと赤/緑の色あせを同時に防ぐ。
     /// </summary>
     public void StartLinearFade(byte field, Rgb from, Rgb to, int durationMs, int stepCount)
     {
@@ -162,7 +163,8 @@ public class EffectRunnerService
                     var effectCt = _scheduler.BeginEffect(cts.Token);
                     await _scheduler.SendInterpolationAsync(
                         field, from, to, stepCount,
-                        TimeSpan.FromMilliseconds(Math.Max(1, durationMs)), effectCt);
+                        TimeSpan.FromMilliseconds(Math.Max(1, durationMs)), effectCt,
+                        curve: FadeCurve.VividLuminance);
                     // 遷移完了後は最終色を確実に発色させ、以後は連続送信で保持（セルフモード突入防止）。
                     await _scheduler.LatchColorHighPriorityAsync(field, to, effectCt);
                     await _scheduler.ContinuousSendWithoutResetAsync(field, to, effectCt);
@@ -261,6 +263,12 @@ public class EffectRunnerService
     {
         lock (_lock)
         {
+            // BUG-20260903-02: StopEffectInternal は前 _effectCts をキャンセルするだけで
+            // _effectTask の停止完了を待たない。協調キャンセルのため前エフェクト(Flash 等)の
+            // 送信ループが FlushQueue 後に「最後の点灯パケット」をキューへ commit し得り、
+            // Rainbow 起動時の 50ms 静穏窓で送出されて前色が一瞬残る。前タスクを退避しておき、
+            // 新 Rainbow タスクの冒頭(lock 外・黒ラッチ前)で await + FlushQueue して残パケットを除去する。
+            var previousEffect = _effectTask;
             StopSequenceInternal();
             StopEffectInternal();
 
@@ -272,6 +280,11 @@ public class EffectRunnerService
             {
                 try
                 {
+                    if (previousEffect != null)
+                    {
+                        try { await previousEffect; } catch { }
+                        _transport.FlushQueue();
+                    }
                     await RunRainbowLoopAsync(
                         mode, colors, cycleDurationMs,
                         blinkPeriodMs, dutyRatio, fadeInMs, fadeOutMs,
@@ -374,19 +387,30 @@ public class EffectRunnerService
         // 残フレームを飛び越えて即座に新色へ上書きする。
         var highPriority = new SendOptions(HighPriority: true, RetransmitCount: 2);
 
-        // BUG-20260901-04: Flash→Rainbow 遷移で、前エフェクトのピーク色が端末にラッチされたまま
-        // 下の「パレット反映待ち(50ms)」の間 残り「一瞬フリーズ＋前色残り」に見える不具合の対策。
-        // パレット送信の前に高優先の黒(消灯)を1発入れ、端末が保持中の残色を即座に打ち消す。
-        // ダイレクト経路のためグローバル場次(0x01)を使用（色/エフェクト経路と同一）。
-        await _transport.EnqueueAsync(
-            LightProtocol.BuildA2_GlobalColor(0x01, 0, 0, 0), highPriority, effectCt);
+        // BUG-20260901-04 / BUG-20260903-02: Flash→Rainbow 遷移で、前エフェクトのピーク色が端末に
+        // ラッチされたまま「パレット反映待ち」の間 残り「一瞬フリーズ＋前色残り」に見える不具合の対策。
+        // 黒(消灯)を高優先で入れて残色を打ち消す。ダイレクト経路のためグローバル場次(0x01)を使用。
+        var blackPacket = LightProtocol.BuildA2_GlobalColor(0x01, 0, 0, 0);
+        await _transport.EnqueueAsync(blackPacket, highPriority, effectCt);
 
-        // Step 1: カラーパレット送信（0xA9 0x02）— 高優先で確実に先着させる
-        // 仕様V4.9(3.18-3.20): FI/FO 系も RGB は 0〜255。下限クランプは行わず素通しする
-        // （V4.8/V4.9 で「最小25」は誤記・実際は最小0 と訂正されたため）。
+        // Step 1: カラーパレット送信（0xA9 0x02）— 高優先で確実に先着させる。表示は変えない（A2 が支配）。
+        // 仕様V4.9(3.18-3.20): FI/FO 系も RGB は 0〜255。下限クランプは行わず素通しする。
         var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(colors);
         await _transport.EnqueueAsync(colorSetupPacket, highPriority, effectCt);
-        await Task.Delay(50, effectCt); // パレット設定の反映待ち
+
+        // BUG-20260903-02(再発対策): 従来は「黒1発＋Task.Delay(50)の無音窓」だったため、
+        //  (a) 黒A2が2.4GHzで欠落すると窓の間ずっと前色が保持される、
+        //  (b) 無音窓で通常キューに湧いた前色パケットが黒の“後”に送られ前色が復活する、
+        // の2経路で「前色が一瞬残ってから再生」が再現し得た。パレット設定待ちの間、黒を高優先で打ち続けて
+        // （保持）欠落を反復補償し、割り込んだ前色も即座に塗り潰す＝確定的な暗転にする。
+        // ※A2(直接色) と A9 02(パレット表) は別レジスタで、A2 はパレットを消さない前提（実機要確認）。
+        const int PaletteSettleMs = 50;
+        const int BlackHoldStepMs = 10;
+        for (int elapsed = 0; elapsed < PaletteSettleMs; elapsed += BlackHoldStepMs)
+        {
+            await Task.Delay(BlackHoldStepMs, effectCt);
+            await _transport.EnqueueAsync(blackPacket, highPriority, effectCt);
+        }
 
         // 先頭フレーム(0)を高優先で1発ラッチし、保持されている旧色を確定的に上書きする
         await _transport.EnqueueAsync(BuildModePacket(0), highPriority, effectCt);

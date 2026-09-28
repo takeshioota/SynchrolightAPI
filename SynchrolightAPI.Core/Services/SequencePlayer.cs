@@ -204,9 +204,17 @@ public class SequencePlayer
     // 2026-05-30 追加: スムーズ遷移で「前ステップの色」を記録する
     private Rgb? _lastStepColor;
 
+    // BUG-20260903-02: 直前ステップの場次。Rainbow 開始時の黒ラッチを前ステップの場次にも届かせ、
+    // Flash 等が別場次で点けた前色を確実に消すために使う（場次不一致ハードニング）。
+    private byte _lastStepField;
+
     /// <summary>単一ステップを即時実行する。</summary>
     public async Task ExecuteStepAsync(SequenceStep step, CancellationToken ct)
     {
+        // BUG-20260903-02(場次不一致対策): 直前ステップの場次を控えてから当ステップ場次で更新する。
+        byte prevStepField = _lastStepField;
+        _lastStepField = step.Field;
+
         // 2026-05-30 追加: TransitionMs によるスムーズ遷移 (A1)
         var transitionMs = step.TransitionMs ?? 0;
         if (transitionMs > 0 && _lastStepColor.HasValue
@@ -221,9 +229,11 @@ public class SequencePlayer
             // スムーズ遷移はエフェクトと同じ堅牢な補間送信（≈20ms/50fps・各フレーム保持中も再送）に統一する。
             // 旧実装は 30ms・1発送信・ループ内で毎回 BeginEffect（＝毎フレーム キューflush）だったため、
             // 時間方向のカクつきとチラつき/不安定の原因になっていた。BeginEffect は遷移開始時に1回だけ呼ぶ。
+            // BUG-20260923-01: 色→色遷移は鮮やかさ保持＋輝度保持補間で送り、輝度沈みと赤/緑の色あせを同時に防ぐ。
             var effectCt = _scheduler.BeginEffect(ct);
             await _scheduler.SendInterpolationAsync(
-                step.Field, from, to, 20, TimeSpan.FromMilliseconds(transitionMs), effectCt);
+                step.Field, from, to, 20, TimeSpan.FromMilliseconds(transitionMs), effectCt,
+                curve: FadeCurve.VividLuminance);
             _lastStepColor = to;
             // 遷移完了後、最終色で連続送信を継続
             _ = _scheduler.ContinuousSendWithoutResetAsync(step.Field, to, effectCt);
@@ -356,11 +366,26 @@ public class SequencePlayer
                     var mode = step.RainbowMode ?? 0;
                     var cycle = step.RainbowCycleDurationMs ?? 1000;
                     // BeginEffect で前操作を停止し、自前のレインボーループを fire-and-forget で開始。
+                    // BUG-20260903-02: Flash 等の前連続エフェクトは BeginEffect でキャンセル + FlushQueue
+                    // されるが、協調キャンセルのため送信ループが FlushQueue 後に「最後の点灯パケット」を
+                    // キューへ commit し得る（EnqueueAsync の Channel 書き込みと FlushQueue のドレインは
+                    // 別スレッドで排他されない）。Rainbow は起動時「黒ラッチ→パレット→Delay(50)→先頭フレーム」
+                    // の 50ms 静穏窓を持つため、この残パケットが送出され「前色が一瞬残ってから再生」に見える。
+                    // 前タスクを await で完全に停止させ（キャンセル済みなので即抜ける）、再度 FlushQueue して
+                    // unwind 中に紛れ込んだ残パケットを除去してからレインボーを開始する。
+                    var previousEffect = _pendingContinuousEffectTask;
                     var effectCt = _scheduler.BeginEffect(ct);
+                    if (previousEffect != null)
+                    {
+                        try { await previousEffect; }
+                        catch (OperationCanceledException) { }
+                        catch { }
+                        _transport.FlushQueue();
+                    }
                     var rainbowTask = RunRainbowLoopAsync(
                         mode, rbColors, cycle,
                         step.RainbowBlinkPeriodMs, step.RainbowDutyRatio,
-                        step.RainbowFadeInMs, step.RainbowFadeOutMs, step.Field, effectCt);
+                        step.RainbowFadeInMs, step.RainbowFadeOutMs, step.Field, prevStepField, effectCt);
                     _pendingContinuousEffectTask = rainbowTask;
                     _logger.LogDebug("SEQ: Rainbow mode={Mode} colors={N} cycle={Cycle}ms at {Time}ms",
                         mode, rbColors.Length, cycle, step.TimeOffsetMs);
@@ -411,6 +436,7 @@ public class SequencePlayer
         int? fadeInMs,
         int? fadeOutMs,
         byte field,
+        byte prevField,
         CancellationToken effectCt)
     {
         try
@@ -447,20 +473,39 @@ public class SequencePlayer
             // 残フレームを飛び越えて即座に新色へ上書きする。
             var highPriority = new SendOptions(HighPriority: true, RetransmitCount: 2);
 
-            // BUG-20260901-04: Flash→Rainbow 遷移で、Flashピーク色が端末にラッチされたまま
-            // 下の「パレット反映待ち(50ms)」の間 残り「一瞬フリーズ＋前色残り」に見える不具合の対策。
-            // パレット送信の前に高優先の黒(消灯)を1発入れ、端末が保持中の残色を即座に打ち消す。
-            // これにより 50ms 窓は「前色ラッチ」→「一瞬の暗転」となり、エフェクト間の自然な遷移になる。
-            // field は当該ステップの場次に合わせる（前ステップの点灯色と同じ場次で上書きするため）。
-            await _transport.EnqueueAsync(
-                LightProtocol.BuildA2_GlobalColor(field, 0, 0, 0), highPriority, effectCt);
+            // BUG-20260901-04 / BUG-20260903-02: Flash→Rainbow 遷移で、前色（Flashピーク色）が端末にラッチ
+            // されたまま「パレット反映待ち」の間 残り「一瞬フリーズ＋前色残り」に見える不具合の対策。
+            // 黒(消灯)を高優先で入れて残色を打ち消す。field は当該ステップの場次に合わせる。
+            var blackPacket = LightProtocol.BuildA2_GlobalColor(field, 0, 0, 0);
+            // BUG-20260903-02(場次不一致): 前ステップが別場次で点灯していたら、そちらにも黒を送る
+            // （多ゾーン誤消灯を避けるため 0x01 グローバル化はせず、実際に点いていた場次だけ消す）。
+            byte[]? prevFieldBlack = (prevField != field)
+                ? LightProtocol.BuildA2_GlobalColor(prevField, 0, 0, 0) : null;
 
-            // Step 1: カラーパレット送信（0xA9 0x02）— 高優先で確実に先着させる
-            // 仕様V4.9(3.18-3.20): FI/FO 系も RGB は 0〜255。下限クランプは行わず素通しする
-            // （V4.8/V4.9 で「最小25」は誤記・実際は最小0 と訂正されたため）。
+            await _transport.EnqueueAsync(blackPacket, highPriority, effectCt);
+            if (prevFieldBlack != null)
+                await _transport.EnqueueAsync(prevFieldBlack, highPriority, effectCt);
+
+            // Step 1: カラーパレット送信（0xA9 0x02）— 高優先で確実に先着させる。表示は変えない（A2 が支配）。
+            // 仕様V4.9(3.18-3.20): FI/FO 系も RGB は 0〜255。下限クランプは行わず素通しする。
             var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(colors);
             await _transport.EnqueueAsync(colorSetupPacket, highPriority, effectCt);
-            await Task.Delay(50, effectCt); // パレット設定の反映待ち
+
+            // BUG-20260903-02(再発対策): 従来は「黒1発＋Task.Delay(50)の無音窓」だったため、
+            //  (a) 黒A2が2.4GHzで欠落すると窓の間ずっと前(Flash)色が保持される、
+            //  (b) 無音窓で通常キューに湧いた前色パケットが黒の“後”に送られ前色が復活する、
+            // の2経路で「前色が一瞬残ってから再生」が再現していた。パレット設定待ちの間、黒を高優先で
+            // 打ち続けて（保持）欠落を反復補償し、割り込んだ前色も即座に塗り潰す＝確定的な暗転にする。
+            // ※A2(直接色) と A9 02(パレット表) は別レジスタで、A2 はパレットを消さない前提（実機要確認）。
+            const int PaletteSettleMs = 50;
+            const int BlackHoldStepMs = 10;
+            for (int elapsed = 0; elapsed < PaletteSettleMs; elapsed += BlackHoldStepMs)
+            {
+                await Task.Delay(BlackHoldStepMs, effectCt);
+                await _transport.EnqueueAsync(blackPacket, highPriority, effectCt);
+                if (prevFieldBlack != null)
+                    await _transport.EnqueueAsync(prevFieldBlack, highPriority, effectCt);
+            }
 
             // 先頭フレーム(0)を高優先で1発ラッチし、保持されている旧色を確定的に上書きする
             await _transport.EnqueueAsync(BuildModePacket(0), highPriority, effectCt);

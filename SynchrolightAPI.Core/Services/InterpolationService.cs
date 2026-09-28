@@ -3,6 +3,36 @@ using SynchrolightAPI.Domain;
 namespace SynchrolightAPI.Services;
 
 /// <summary>
+/// 色補間の曲線種別。SendInterpolationAsync が中間フレームの生成方法を切り替える。
+/// </summary>
+public enum FadeCurve
+{
+    /// <summary>byte 空間の線形補間（色相遷移の既定・SevenColor 等）。</summary>
+    LinearByte,
+
+    /// <summary>知覚（γ の逆空間）で線形。Fade IN/OUT/Breathing の暗部カクつき対策。</summary>
+    Perceptual,
+
+    /// <summary>
+    /// 線形光（実輝度）空間で線形。色→色クロスフェード（OL / Color 遷移）で、
+    /// 色が溶け合う間の実輝度を弦（直線）どおりに保ち、byte 線形で生じる中間の輝度沈み
+    /// （ガンマの凸性による）を解消する（BUG-20260923-01）。
+    /// ※輝度は一定になるが、輝度維持のため遷移中は反対チャンネルが残り続け、赤/緑が
+    ///   くすんで（色あせて）見える副作用があった → 現在は VividLuminance に置き換え。
+    /// </summary>
+    LinearLight,
+
+    /// <summary>
+    /// 鮮やかさ保持＋輝度保持（BUG-20260923-01 デグレ対応・候補A）。
+    /// byte 空間線形補間の「鮮やかな色経路（＝端点付近で純色に素早く戻る）」を保ったまま、
+    /// 各フレームの明るさだけを目標実輝度（端点の実輝度和を線形補間した値）へ正規化する。
+    /// LinearLight の「輝度は一定だが遷移中ずっと色あせる（赤/緑がくすむ）」副作用を解消しつつ、
+    /// 中間の輝度沈みも出さない。OL / Color 遷移のクロスフェードで使用。
+    /// </summary>
+    VividLuminance,
+}
+
+/// <summary>
 /// RGB色の補間ステップを生成するサービス。
 /// Fade IN/OUT で滑らかな色遷移を実現するための中間値コマンド列を生成する。
 /// 仕様: 2.3 補間送信 / 3.3 Fade滑らか化
@@ -37,6 +67,88 @@ public class InterpolationService
             byte r = Lerp(from.R, to.R, t);
             byte g = Lerp(from.G, to.G, t);
             byte b = Lerp(from.B, to.B, t);
+            steps[i] = new Rgb(r, g, b);
+        }
+        return steps;
+    }
+
+    /// <summary>
+    /// 2色間を<strong>線形光（実輝度）空間</strong>で補間するステップを生成する（BUG-20260923-01）。
+    /// 各チャンネルを byte → 実輝度 lin=(byte/255)^γ に decode → lin を線形補間 → byte=255×lin^(1/γ) に
+    /// encode する。実輝度が時間に対して直線（弦）で動くため、色が溶け合う間の輝度沈み（byte 線形補間＋
+    /// ガンマの凸性で必ず中間が暗くなる現象）を解消する。両端が同輝度なら輝度は一定のまま色だけ混じる。
+    /// 端点は元の色を厳密に再現する（t=0→from, t=1→to）。OL / Color 遷移のクロスフェード用。
+    /// </summary>
+    public IReadOnlyList<Rgb> LinearLightSteps(Rgb from, Rgb to, int stepCount, double gamma = DefaultGamma)
+    {
+        if (stepCount < 1) stepCount = 1;
+        if (gamma <= 0) gamma = 1.0;
+
+        // 端点を実輝度（0..1）へ decode
+        double fr = Math.Pow(from.R / 255.0, gamma);
+        double fg = Math.Pow(from.G / 255.0, gamma);
+        double fb = Math.Pow(from.B / 255.0, gamma);
+        double tr = Math.Pow(to.R / 255.0, gamma);
+        double tg = Math.Pow(to.G / 255.0, gamma);
+        double tb = Math.Pow(to.B / 255.0, gamma);
+
+        double invGamma = 1.0 / gamma;
+        var steps = new Rgb[stepCount + 1];
+        for (int i = 0; i <= stepCount; i++)
+        {
+            double t = (double)i / stepCount;
+            byte r = LinearLightLerp(fr, tr, t, invGamma);
+            byte g = LinearLightLerp(fg, tg, t, invGamma);
+            byte b = LinearLightLerp(fb, tb, t, invGamma);
+            steps[i] = new Rgb(r, g, b);
+        }
+        return steps;
+    }
+
+    /// <summary>
+    /// 2色間を<strong>鮮やかさ保持＋輝度保持</strong>で補間するステップを生成する（BUG-20260923-01 デグレ対応・候補A）。
+    /// byte 空間線形補間の「色味（＝端点付近で反対 ch が素早く落ち、純色に戻る鮮やかな色経路）」を保ったまま、
+    /// 各フレームの明るさだけを目標実輝度（端点の実輝度和 <c>Σ(byte/255)^γ</c> を t で線形補間した値）へ正規化する。
+    /// これにより (1) 中間の輝度沈み（byte 線形＋ガンマ凸性で暗くなる現象・BUG-20260923-01 本体）を解消し、
+    /// かつ (2) LinearLight のように輝度維持のため反対 ch を残して赤/緑がくすむ副作用も出さない。
+    /// 端点は元の色を厳密に再現する（t=0→from, t=1→to）。単色↔黒（1ch のみ）の遷移は LinearLight と一致する。
+    /// 明るさ正規化で 1.0 を超えた ch はクリップするため、端点輝度差が大きい遷移（例: 白→濃色）の中間は
+    /// 目標よりわずかに暗くなり得るが、報告対象の濃色どうし（等輝度に近い）では発生しない。
+    /// </summary>
+    public IReadOnlyList<Rgb> VividLuminanceSteps(Rgb from, Rgb to, int stepCount, double gamma = DefaultGamma)
+    {
+        if (stepCount < 1) stepCount = 1;
+        if (gamma <= 0) gamma = 1.0;
+
+        double invGamma = 1.0 / gamma;
+        // 端点の実輝度和（各 ch を実輝度に decode して合計）。目標輝度の線形補間に使う。
+        double fromLum = DecodeLinear(from.R, gamma) + DecodeLinear(from.G, gamma) + DecodeLinear(from.B, gamma);
+        double toLum   = DecodeLinear(to.R, gamma)   + DecodeLinear(to.G, gamma)   + DecodeLinear(to.B, gamma);
+
+        var steps = new Rgb[stepCount + 1];
+        for (int i = 0; i <= stepCount; i++)
+        {
+            double t = (double)i / stepCount;
+
+            // 1) byte 空間線形補間の色味（鮮やかな色経路。ch 比＝彩度は端点付近で保たれる）
+            double blR = from.R + (to.R - from.R) * t;
+            double blG = from.G + (to.G - from.G) * t;
+            double blB = from.B + (to.B - from.B) * t;
+
+            // 2) その色の実輝度と、目標実輝度（端点輝度和の線形補間＝等輝度端点なら一定）
+            double linR = DecodeLinear(blR, gamma);
+            double linG = DecodeLinear(blG, gamma);
+            double linB = DecodeLinear(blB, gamma);
+            double curLum = linR + linG + linB;
+            double targetLum = fromLum + (toLum - fromLum) * t;
+
+            // 3) 明るさ（実輝度和）だけを目標へ正規化。色味＝ch 比は byte 線形のまま保つ。
+            //    黒フレーム（curLum=0）は据置（そのまま黒）。
+            double scale = curLum > 0.0 ? targetLum / curLum : 0.0;
+
+            byte r = EncodeToByte(linR * scale, invGamma);
+            byte g = EncodeToByte(linG * scale, invGamma);
+            byte b = EncodeToByte(linB * scale, invGamma);
             steps[i] = new Rgb(r, g, b);
         }
         return steps;
@@ -112,4 +224,23 @@ public class InterpolationService
         double linear = Math.Pow(p, gamma);      // 輝度（線形）へ戻す
         return (byte)Math.Clamp(Math.Round(linear * 255.0), 0, 255);
     }
+
+    /// <summary>
+    /// 実輝度（線形光）空間で線形補間した値を byte（gamma-encode）へ戻す。
+    /// fromLin/toLin は端点の実輝度（0..1）、t は 0..1 の進行度、invGamma = 1/γ。
+    /// </summary>
+    private static byte LinearLightLerp(double fromLin, double toLin, double t, double invGamma)
+    {
+        double lin = fromLin + (toLin - fromLin) * t;          // 実輝度で線形補間（弦どおり）
+        double encoded = Math.Pow(Math.Max(0.0, lin), invGamma); // gamma-encode して byte 値へ
+        return (byte)Math.Clamp(Math.Round(encoded * 255.0), 0, 255);
+    }
+
+    /// <summary>byte 値（0..255・小数可）を実輝度 0..1 へ decode する（VividLuminanceSteps 用）。</summary>
+    private static double DecodeLinear(double byteValue, double gamma)
+        => Math.Pow(Math.Clamp(byteValue, 0.0, 255.0) / 255.0, gamma);
+
+    /// <summary>実輝度 0..1（正規化後は 1.0 超をクリップ）を gamma-encode して byte 値へ戻す（VividLuminanceSteps 用）。</summary>
+    private static byte EncodeToByte(double linear, double invGamma)
+        => (byte)Math.Clamp(Math.Round(Math.Pow(Math.Clamp(linear, 0.0, 1.0), invGamma) * 255.0), 0, 255);
 }

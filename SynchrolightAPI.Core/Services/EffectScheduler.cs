@@ -104,7 +104,7 @@ public class EffectScheduler
     /// </summary>
     public async Task SendInterpolationAsync(
         byte field, Rgb from, Rgb to, int stepCount,
-        TimeSpan duration, CancellationToken effectCt, bool perceptual = false)
+        TimeSpan duration, CancellationToken effectCt, FadeCurve curve = FadeCurve.LinearByte)
     {
         // カクつき対策（Fade 滑らか化）: 可視フレーム数を所要時間から ~20ms/フレーム
         // （= ContinuousSendIntervalMs, ≈50fps）で算出する。従来は呼び出し側 stepCount
@@ -117,17 +117,26 @@ public class EffectScheduler
         int frames = Math.Clamp(Math.Max(stepCount, timeBasedFrames),
                                 MinInterpolationFrames, MaxInterpolationFrames);
 
-        // perceptual=true（Fade IN/OUT/Breathing）はガンマ空間で補間し、消灯付近の
-        // 知覚バンディング（カクつき）を解消する。色相遷移（SevenColor 等）は線形のまま。
-        var steps = perceptual
-            ? _interpolation.PerceptualSteps(from, to, frames)
-            : _interpolation.LinearSteps(from, to, frames);
+        // 補間曲線を種別で切替える：
+        //  Perceptual（Fade IN/OUT/Breathing）＝ガンマ空間で補間し消灯付近の知覚バンディング（カクつき）を解消。
+        //  VividLuminance（OL / Color 遷移）＝byte 線形の鮮やかな色経路を保ちつつ明るさだけ目標輝度へ正規化し、
+        //    輝度沈み（BUG-20260923-01 本体）と赤/緑の色あせ（同デグレ）を同時に解消。
+        //  LinearLight＝実輝度空間で補間（旧・輝度沈みは消えるが遷移中色あせる。VividLuminance に置換済）。
+        //  LinearByte（既定・SevenColor 等の色相遷移）＝byte 空間の線形補間。
+        var steps = curve switch
+        {
+            FadeCurve.Perceptual    => _interpolation.PerceptualSteps(from, to, frames),
+            FadeCurve.VividLuminance => _interpolation.VividLuminanceSteps(from, to, frames),
+            FadeCurve.LinearLight   => _interpolation.LinearLightSteps(from, to, frames),
+            _                       => _interpolation.LinearSteps(from, to, frames),
+        };
         var interval = _interpolation.CalcStepInterval(duration, frames);
 
         foreach (var rgb in steps)
         {
             effectCt.ThrowIfCancellationRequested();
-            await SendFrameForDurationAsync(field, rgb, interval, effectCt);
+            // BUG-20260928-01: 補間フレームは一意なので must-send（コアレス破棄しない）で送る。
+            await SendFrameForDurationAsync(field, rgb, interval, effectCt, dropIfLate: false);
         }
     }
 
@@ -153,6 +162,17 @@ public class EffectScheduler
         new(Deadline: DateTimeOffset.UtcNow.AddMilliseconds(ContinuousSendDeadlineMs), RetransmitCount: 1);
 
     /// <summary>
+    /// 補間フレーム（フェード／OL／Color 遷移／SevenColor の途中経過）用の送信オプション（BUG-20260928-01）。
+    /// 補間フレームは 1 つ 1 つが<strong>一意の色</strong>なので、キープアライブのように 80ms コアレスで
+    /// 破棄すると中間ステップが欠落し「光が飛ぶ」。そこで <c>Deadline=null</c>（IsExpired=false → 破棄されない
+    /// ＝must-send）にして必ず順序どおり送出する。消費が一時的に遅れても BoundedChannel(FullMode=Wait) の
+    /// バックプレッシャで欠落せず、演出がわずかに後ろへずれるだけ（ジャンプより遥かに軽い）で済む。
+    /// RetransmitCount=1 で TxWorker の処理を軽く保ち、破棄ではなく順序どおりの確実送出に依存する。
+    /// ※同色を繰り返すキープアライブ／保持／Flash ループは従来どおり短い Deadline でコアレスする（破棄されても無害）。
+    /// </summary>
+    private static SendOptions InterpolationFrameSendOptions() => new(RetransmitCount: 1);
+
+    /// <summary>
     /// 指定色を高優先キューで送出する（ラッチ）。通常キューの滞留(backlog)を飛び越えて
     /// 確実に発色させるために、エフェクトのフェード完了直後などに1発だけ呼ぶ。
     /// 高優先キューは TxWorker が通常キューより先に消化するため、混雑時でも即時に届く。
@@ -170,9 +190,13 @@ public class EffectScheduler
     /// 指定色を指定時間連続送信する（BeginEffect 後に使用）。
     /// holdDuration の間、ContinuousSendIntervalMs 間隔でパケットを送信し続ける。
     /// Flash の ON/OFF フェーズや補間ステップの保持に使用する。
+    /// <paramref name="dropIfLate"/>=true（既定）は 80ms コアレス期限つき（同色再送＝キープアライブ用途で、
+    /// 渋滞時に破棄されても無害）。false は期限なし＝must-send（BUG-20260928-01：補間の一意フレームが
+    /// 破棄されて「光が飛ぶ」のを防ぐ。破棄せずバックプレッシャで順序どおり確実送出）。
     /// </summary>
     public async Task SendFrameForDurationAsync(
-        byte field, Rgb color, TimeSpan holdDuration, CancellationToken effectCt)
+        byte field, Rgb color, TimeSpan holdDuration, CancellationToken effectCt,
+        bool dropIfLate = true)
     {
         RecordLastColor(field, color);
         var packet = LightProtocol.BuildA2_GlobalColor(field, color.R, color.G, color.B);
@@ -180,7 +204,8 @@ public class EffectScheduler
         while (sw.Elapsed < holdDuration)
         {
             effectCt.ThrowIfCancellationRequested();
-            await _transport.EnqueueAsync(packet, ContinuousSendOptions(), effectCt);
+            var options = dropIfLate ? ContinuousSendOptions() : InterpolationFrameSendOptions();
+            await _transport.EnqueueAsync(packet, options, effectCt);
             var remainingMs = (holdDuration - sw.Elapsed).TotalMilliseconds;
             var delayMs = (int)Math.Min(ContinuousSendIntervalMs, Math.Max(0, remainingMs));
             if (delayMs > 0)
