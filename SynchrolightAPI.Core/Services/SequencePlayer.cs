@@ -474,40 +474,56 @@ public class SequencePlayer
             var highPriority = new SendOptions(HighPriority: true, RetransmitCount: 2);
 
             // BUG-20260901-04 / BUG-20260903-02: Flash→Rainbow 遷移で、前色（Flashピーク色）が端末にラッチ
-            // されたまま「パレット反映待ち」の間 残り「一瞬フリーズ＋前色残り」に見える不具合の対策。
-            // 黒(消灯)を高優先で入れて残色を打ち消す。field は当該ステップの場次に合わせる。
+            // されたまま「一瞬フリーズ＋前色残り」に見える不具合の対策。黒(消灯)を高優先で入れて残色を打ち消す。
+            // field は当該ステップの場次に合わせる。
             var blackPacket = LightProtocol.BuildA2_GlobalColor(field, 0, 0, 0);
             // BUG-20260903-02(場次不一致): 前ステップが別場次で点灯していたら、そちらにも黒を送る
             // （多ゾーン誤消灯を避けるため 0x01 グローバル化はせず、実際に点いていた場次だけ消す）。
             byte[]? prevFieldBlack = (prevField != field)
                 ? LightProtocol.BuildA2_GlobalColor(prevField, 0, 0, 0) : null;
 
-            await _transport.EnqueueAsync(blackPacket, highPriority, effectCt);
-            if (prevFieldBlack != null)
-                await _transport.EnqueueAsync(prevFieldBlack, highPriority, effectCt);
-
-            // Step 1: カラーパレット送信（0xA9 0x02）— 高優先で確実に先着させる。表示は変えない（A2 が支配）。
-            // 仕様V4.9(3.18-3.20): FI/FO 系も RGB は 0〜255。下限クランプは行わず素通しする。
-            var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(colors);
-            await _transport.EnqueueAsync(colorSetupPacket, highPriority, effectCt);
-
-            // BUG-20260903-02(再発対策): 従来は「黒1発＋Task.Delay(50)の無音窓」だったため、
-            //  (a) 黒A2が2.4GHzで欠落すると窓の間ずっと前(Flash)色が保持される、
-            //  (b) 無音窓で通常キューに湧いた前色パケットが黒の“後”に送られ前色が復活する、
-            // の2経路で「前色が一瞬残ってから再生」が再現していた。パレット設定待ちの間、黒を高優先で
-            // 打ち続けて（保持）欠落を反復補償し、割り込んだ前色も即座に塗り潰す＝確定的な暗転にする。
-            // ※A2(直接色) と A9 02(パレット表) は別レジスタで、A2 はパレットを消さない前提（実機要確認）。
-            const int PaletteSettleMs = 50;
-            const int BlackHoldStepMs = 10;
-            for (int elapsed = 0; elapsed < PaletteSettleMs; elapsed += BlackHoldStepMs)
+            // 黒(必要なら前ステップ場次にも)を1発 高優先で送るローカル関数。
+            async Task SendBlackAsync()
             {
-                await Task.Delay(BlackHoldStepMs, effectCt);
                 await _transport.EnqueueAsync(blackPacket, highPriority, effectCt);
                 if (prevFieldBlack != null)
                     await _transport.EnqueueAsync(prevFieldBlack, highPriority, effectCt);
             }
 
-            // 先頭フレーム(0)を高優先で1発ラッチし、保持されている旧色を確定的に上書きする
+            // BUG-20260903-02(v2.8.0でも再現→送出順序の見直し): 従来は
+            //   「黒1発 → パレット(A9 02) → 黒保持×5 → 先頭フレーム(A9 03)」
+            // の順で、黒保持ループが【すべてパレットの“後”】にあった。端末が A9 02 受信後（レインボー準備状態）
+            // に A2 ダイレクト色を無視する場合（＝旧コメントに明記していた「A2 はパレットを消さない」未検証の
+            // 前提が偽の場合）、パレット後の黒保持は無効化され、頼りは【パレット前のたった1発の黒】だけになる。
+            // その1発が 2.4GHz で欠落した回に、前(Flash)色が settle 窓の間ずっと保持され「場合がある」で間欠再現する。
+            // 対策: 黒をまず【パレットより前】に保持送信して確実に暗転させてから、パレット→先頭フレームを送る。
+            //   これで「A2 が A9 02 の後に効くか否か」に依存せず、A9 03 到達前に画面は確実に黒になる
+            //   （FI/FO は黒からフェードイン）。総 settle 時間は従来と同じ 50ms（前 30ms＋後 20ms）に保つ。
+            const int PretPaletteBlackMs = 30;  // パレット送出【前】に黒で暗転を確定する保持窓
+            const int PostPaletteBlackMs = 20;  // パレット→先頭フレームの反映待ち（この間も黒を保持し暗転維持）
+            const int BlackHoldStepMs = 10;
+
+            // (1) パレット前: 黒を先出し＋保持送信で暗転を確定する（RF欠落を反復補償）。
+            await SendBlackAsync();
+            for (int elapsed = 0; elapsed < PretPaletteBlackMs; elapsed += BlackHoldStepMs)
+            {
+                await Task.Delay(BlackHoldStepMs, effectCt);
+                await SendBlackAsync();
+            }
+
+            // (2) カラーパレット送信（0xA9 0x02）。表示は変えない（黒はラッチ済み）。
+            // 仕様V4.9(3.18-3.20): FI/FO 系も RGB は 0〜255。下限クランプは行わず素通しする。
+            var colorSetupPacket = LightProtocol.BuildA9_SetRainbowColors(colors);
+            await _transport.EnqueueAsync(colorSetupPacket, highPriority, effectCt);
+
+            // (3) パレット反映待ち（短め）。黒はラッチ済みなので、A2 が A9 02 後に無視されても暗転が維持される。
+            for (int elapsed = 0; elapsed < PostPaletteBlackMs; elapsed += BlackHoldStepMs)
+            {
+                await Task.Delay(BlackHoldStepMs, effectCt);
+                await SendBlackAsync();
+            }
+
+            // (4) 先頭フレーム(0)を高優先で1発ラッチし、黒→レインボー（FI/FO は黒からフェードイン）。
             await _transport.EnqueueAsync(BuildModePacket(0), highPriority, effectCt);
 
             // BUG(FI/FO光はじめ不定): FI/FO 系で「色切替間隔 < フェード時間」だと、フェード進行中に

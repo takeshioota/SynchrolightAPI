@@ -121,6 +121,9 @@ public class SequencePlayerTests
     private static bool IsModeFrame(RecordingTransport.Entry e) =>
         e.Packet.Length >= 2 && e.Packet[0] == 0xA9 && e.Packet[1] == 0x03;
 
+    private static bool IsPalette(RecordingTransport.Entry e) =>
+        e.Packet.Length >= 2 && e.Packet[0] == 0xA9 && e.Packet[1] == 0x02;
+
     [Fact]
     public async Task Rainbow開始時は設定待ちの間ずっと黒を保持送信する_BUG20260903_02()
     {
@@ -198,5 +201,47 @@ public class SequencePlayerTests
 
         Assert.Contains(entries, e => IsBlackA2OnField(e, 0x01));  // Rainbow ステップ場次
         Assert.Contains(entries, e => IsBlackA2OnField(e, 0x02));  // 前ステップ(別場次)にも黒
+    }
+
+    [Fact]
+    public async Task Rainbow開始時は黒をパレット送出より前に確定する_BUG20260903_02()
+    {
+        // v2.8.0でも再現→送出順序を「黒保持(パレット前) → パレット → 短い保持 → 先頭フレーム」に見直した。
+        // 端末が A9 02 受信後に A2 ダイレクト色を無視しても暗転が保たれるよう、黒はパレットより前に確定する。
+        var player = NewPlayer(out var transport);
+        using var cts = new CancellationTokenSource();
+
+        var seq = new Sequence
+        {
+            Name = "black-before-palette",
+            Steps = new()
+            {
+                new SequenceStep
+                {
+                    TimeOffsetMs = 0,
+                    CommandType = SequenceCommandType.Rainbow,
+                    RainbowMode = 2, RainbowFadeInMs = 1000, RainbowFadeOutMs = 1000, RainbowCycleDurationMs = 3000,
+                    Field = 0x01,
+                },
+            }
+        };
+
+        var run = player.PlayAsync(seq, cts.Token);
+        await Task.Delay(150);
+        cts.Cancel();
+        try { await run; } catch (OperationCanceledException) { } catch { }
+
+        var entries = transport.Entries.ToList();
+
+        int firstBlack = entries.FindIndex(IsBlackA2);
+        int firstPalette = entries.FindIndex(IsPalette);
+        int firstFrame = entries.FindIndex(IsModeFrame);
+
+        Assert.True(firstBlack >= 0, "黒ラッチが送出される");
+        Assert.True(firstPalette >= 0, "パレット(A9 02)が送出される");
+        // 黒はパレット(A9 02)より前に確定する（A9 02 後に A2 が無効でも暗転を維持できるように）。
+        Assert.True(firstBlack < firstPalette, $"黒はパレット(A9 02)より前に送る: black={firstBlack} palette={firstPalette}");
+        // パレット→先頭フレームの順は維持（パレット未設定で先頭フレームを描かない）。
+        Assert.True(firstFrame < 0 || firstPalette < firstFrame, "パレットは先頭フレームより前");
     }
 }
