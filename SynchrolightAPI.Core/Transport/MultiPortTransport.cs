@@ -14,6 +14,14 @@ public class MultiPortTransport : ITransport, IDisposable
     private readonly ILogger<MultiPortTransport> _logger;
     private readonly Channel<SendEnvelope> _highPriorityChannel;
     private readonly Channel<SendEnvelope> _normalChannel;
+    private readonly Channel<SendEnvelope> _continuousChannel;
+
+    /// <summary>
+    /// 連続（最新値）チャネルの容量。小さく保ち DropOldest と併せることで、消化が一時的に
+    /// 追いつかなくても滞留が累積せず（常に直近数フレームのみ保持）、古い中間フレームは捨てて
+    /// 最新を送る。容量 4 ≒ 最大 80ms(20ms×4) の遅延上限＝知覚されない範囲で単発ジッタを吸収する。
+    /// </summary>
+    private const int ContinuousQueueCapacity = 4;
     private readonly List<SerialPort> _ports = [];
     private readonly HashSet<string> _expectedPortNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
@@ -26,6 +34,9 @@ public class MultiPortTransport : ITransport, IDisposable
 
     /// <summary>通常キューのReader（TxWorkerServiceが使用）</summary>
     internal ChannelReader<SendEnvelope> NormalReader => _normalChannel.Reader;
+
+    /// <summary>連続（最新値）キューのReader（TxWorkerServiceが使用）</summary>
+    internal ChannelReader<SendEnvelope> ContinuousReader => _continuousChannel.Reader;
 
     /// <summary>接続中のSerialPort一覧（TxWorkerServiceが送信に使用）</summary>
     internal IReadOnlyList<SerialPort> ConnectedPorts
@@ -201,7 +212,24 @@ public class MultiPortTransport : ITransport, IDisposable
             SingleReader = true,
             SingleWriter = false
         });
+
+        // 連続エフェクト（フェード等）の補間フレーム用「最新値」チャネル。
+        // DropOldest＝満杯時は最古を捨てて最新を保持するため、消化が一時的に追いつかなくても
+        // 滞留が累積せず、古いフレームが数秒遅れて出続ける「演出が止まる」事象（BUG-20260928-01）を防ぐ。
+        // 消化に余裕があれば全フレームが流れて従来どおり滑らか、過負荷時のみ中間を間引いて最新へ追従する。
+        _continuousChannel = Channel.CreateBounded<SendEnvelope>(new BoundedChannelOptions(ContinuousQueueCapacity)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = false
+        });
     }
+
+    /// <summary>送信オプションに応じた投入先チャネルを選ぶ（高優先 → 連続(最新値) → 通常）。</summary>
+    private Channel<SendEnvelope> SelectChannel(SendOptions options) =>
+        options.HighPriority ? _highPriorityChannel
+        : options.LatestOnly ? _continuousChannel
+        : _normalChannel;
 
     public IReadOnlyList<PortInfo> ListPorts()
     {
@@ -311,7 +339,7 @@ public class MultiPortTransport : ITransport, IDisposable
             OperationId: null
         );
 
-        var channel = options.HighPriority ? _highPriorityChannel : _normalChannel;
+        var channel = SelectChannel(options);
         await channel.Writer.WriteAsync(envelope, ct);
     }
 
@@ -332,11 +360,12 @@ public class MultiPortTransport : ITransport, IDisposable
             OperationId: operationId
         );
 
-        var channel = options.HighPriority ? _highPriorityChannel : _normalChannel;
+        var channel = SelectChannel(options);
         await channel.Writer.WriteAsync(envelope, ct);
 
         _logger.LogDebug("Enqueue [{OpId}] priority={Priority} queue={Queue}",
-            operationId ?? "-", options.HighPriority ? "HIGH" : "NORMAL",
+            operationId ?? "-",
+            options.HighPriority ? "HIGH" : options.LatestOnly ? "LATEST" : "NORMAL",
             channel.Reader.Count);
     }
 
@@ -346,8 +375,9 @@ public class MultiPortTransport : ITransport, IDisposable
         // 高優先チャネルも消化対象に含めないと、TxWorker が高優先を先に読むため、
         // 残存した高優先パケットが Emergency 等の新コマンド送信より前に流れてしまう。
         while (_normalChannel.Reader.TryRead(out _)) { }
+        while (_continuousChannel.Reader.TryRead(out _)) { }
         while (_highPriorityChannel.Reader.TryRead(out _)) { }
-        _logger.LogInformation("送信キュー（通常・高優先）をフラッシュしました");
+        _logger.LogInformation("送信キュー（通常・連続・高優先）をフラッシュしました");
     }
 
     public TransportStatus GetStatus()
@@ -371,6 +401,7 @@ public class MultiPortTransport : ITransport, IDisposable
 
         _highPriorityChannel.Writer.TryComplete();
         _normalChannel.Writer.TryComplete();
+        _continuousChannel.Writer.TryComplete();
         DisconnectAsync().GetAwaiter().GetResult();
         GC.SuppressFinalize(this);
     }

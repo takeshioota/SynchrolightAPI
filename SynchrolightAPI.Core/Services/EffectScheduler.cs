@@ -163,14 +163,22 @@ public class EffectScheduler
 
     /// <summary>
     /// 補間フレーム（フェード／OL／Color 遷移／SevenColor の途中経過）用の送信オプション（BUG-20260928-01）。
-    /// 補間フレームは 1 つ 1 つが<strong>一意の色</strong>なので、キープアライブのように 80ms コアレスで
-    /// 破棄すると中間ステップが欠落し「光が飛ぶ」。そこで <c>Deadline=null</c>（IsExpired=false → 破棄されない
-    /// ＝must-send）にして必ず順序どおり送出する。消費が一時的に遅れても BoundedChannel(FullMode=Wait) の
-    /// バックプレッシャで欠落せず、演出がわずかに後ろへずれるだけ（ジャンプより遥かに軽い）で済む。
-    /// RetransmitCount=1 で TxWorker の処理を軽く保ち、破棄ではなく順序どおりの確実送出に依存する。
+    /// <para>
+    /// 補間フレームは <see cref="SendOptions.LatestOnly"/>=true で専用の「最新値」チャネル
+    /// （容量わずか・DropOldest）へ送る。消化に余裕がある通常時は全フレームが順序どおり流れて滑らか。
+    /// 消化が一時的に追いつかない過負荷時のみ、古い中間フレームを捨てて<strong>常に最新へ追従</strong>する。
+    /// </para>
+    /// <para>
+    /// 旧実装は「一意フレームを 1 つも捨てない must-send（通常キュー FullMode=Wait）」だったが、
+    /// 消化（約42〜50/s）が生産（約50fps）をわずかに下回ると滞留が累積して最大数秒遅れ、
+    /// 「数秒前の色が出続ける＝演出が止まる」事象になっていた。最新値方式は滞留を容量上限（≒80ms）に
+    /// 抑えるため凍結しない。過負荷時に間引くのは「過去フレームへ化ける（光が飛ぶ）」ではなく
+    /// 「最新へ前進（＝少し急ぎ足のフェード）」なので、旧 must-send 化以前のジャンプ回帰も招かない。
+    /// RetransmitCount=1 は TxWorker の処理を軽く保ち消化レートを上げるため。
     /// ※同色を繰り返すキープアライブ／保持／Flash ループは従来どおり短い Deadline でコアレスする（破棄されても無害）。
+    /// </para>
     /// </summary>
-    private static SendOptions InterpolationFrameSendOptions() => new(RetransmitCount: 1);
+    private static SendOptions InterpolationFrameSendOptions() => new(RetransmitCount: 1, LatestOnly: true);
 
     /// <summary>
     /// 指定色を高優先キューで送出する（ラッチ）。通常キューの滞留(backlog)を飛び越えて
