@@ -13,8 +13,8 @@
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <!-- 起動バナーに表示する版数（顧客が実行中ビルドを確認できるように。UI と同じ版数運用） -->
-    <Version>2.10.0</Version>
-    <InformationalVersion>2.10.0 (tuki.)</InformationalVersion>
+    <Version>2.11.2</Version>
+    <InformationalVersion>2.11.2 (tuki.)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 

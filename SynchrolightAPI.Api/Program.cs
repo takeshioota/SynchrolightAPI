@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
-using SynchrolightAPI.Api.Logging;
+using SynchrolightAPI.Logging;
 using SynchrolightAPI.Api.Services;
 using SynchrolightAPI.Protocol;
 using SynchrolightAPI.Services;

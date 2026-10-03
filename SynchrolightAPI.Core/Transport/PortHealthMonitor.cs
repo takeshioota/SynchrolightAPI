@@ -12,7 +12,10 @@ public class PortHealthMonitor : BackgroundService
     private readonly MultiPortTransport _transport;
     private readonly ILogger<PortHealthMonitor> _logger;
     private readonly TimeSpan _checkInterval = TimeSpan.FromSeconds(5);
-    private readonly int _maxReconnectAttempts = 3;
+    // BUG-20261002-01: USB/VM グリッチで 4 ポートが同時脱落する事象への復帰性改善。
+    // 以前は再接続を最大 3 回で諦め、以降は約 30 秒待ってから再試行していたため、USB が復帰しても
+    // 最大 30 秒ほど暗転が続いた。ライブ運用では「諦めず毎チェック（5 秒毎）試行し、復帰し次第すぐ復旧」
+    // を優先する。ログはスパムを避けるため最初の数回＋以降は約 1 分毎のみ出す。
     private readonly Dictionary<string, int> _reconnectAttempts = new(StringComparer.OrdinalIgnoreCase);
 
     public PortHealthMonitor(
@@ -51,41 +54,23 @@ public class PortHealthMonitor : BackgroundService
                     continue;
                 }
 
-                // 切断検出 → 再接続試行
+                // 切断検出 → 諦めずに毎チェック（5 秒毎）再接続を試行する（ライブ運用: USB 復帰後すぐ復旧）。
                 _reconnectAttempts.TryGetValue(expectedName, out var attempts);
 
-                if (attempts >= _maxReconnectAttempts)
+                // ログは最初の 3 回＋以降は約 1 分毎（12 回＝5 秒×12）のみ。復旧しない間のスパムを防ぐ。
+                var shouldLog = attempts < 3 || attempts % 12 == 0;
+                if (shouldLog)
                 {
-                    // 最大リトライ数到達 — 長いバックオフ後にリセット
-                    if (attempts == _maxReconnectAttempts)
-                    {
-                        _logger.LogWarning("ポート {PortName} の再接続が{Max}回失敗、待機中",
-                            expectedName, _maxReconnectAttempts);
-                        _reconnectAttempts[expectedName] = attempts + 1; // 次回以降は再ログしない
-                    }
-
-                    // 30秒ごとにリトライカウントリセットして再試行
-                    if (attempts > _maxReconnectAttempts + 5)
-                    {
-                        _reconnectAttempts[expectedName] = 0;
-                    }
-                    else
-                    {
-                        _reconnectAttempts[expectedName] = attempts + 1;
-                    }
-                    continue;
+                    _logger.LogInformation("ポート {PortName} 再接続試行 ({Attempt} 回目)",
+                        expectedName, attempts + 1);
                 }
-
-                // 指数バックオフ: 5s, 10s, 20s
-                var backoff = TimeSpan.FromSeconds(_checkInterval.TotalSeconds * Math.Pow(2, attempts));
-                _logger.LogInformation("ポート {PortName} 再接続試行 ({Attempt}/{Max})",
-                    expectedName, attempts + 1, _maxReconnectAttempts);
 
                 var success = _transport.TryReconnectPort(expectedName);
 
                 if (success)
                 {
-                    _logger.LogInformation("ポート {PortName} 再接続成功", expectedName);
+                    _logger.LogInformation("ポート {PortName} 再接続成功（{Attempt} 回目）",
+                        expectedName, attempts + 1);
                     _reconnectAttempts.Remove(expectedName);
                 }
                 else
