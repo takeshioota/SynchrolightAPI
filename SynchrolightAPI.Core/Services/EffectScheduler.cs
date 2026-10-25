@@ -341,6 +341,32 @@ public class EffectScheduler
     }
 
     /// <summary>
+    /// 複数の事前ビルド済みパケットを「1まとまり（バースト）」で連続送信して保持する。
+    /// BeginEffect で新操作を開始し、キャンセルまで「全パケットを間を空けず連続送出 → burstGapMs 待機」を繰り返す。
+    /// 1パケットずつ巡回送信（従来の RotateInterval 方式）より、全ブロック（例: レインボー7色）の更新が
+    /// 1バースト内（≒数十ms）に収まり、ブロック（端末）ごとの点灯/色替えタイミングのずれを小さくできる。
+    /// RetransmitCount=1 で TxWorker の1パケット処理を軽くしてバーストを素早く送り切る
+    /// （到達信頼性は burstGapMs 間隔で反復されるバーストそのものが担保する）。
+    /// </summary>
+    public async Task SendContinuousBurstAsync(IReadOnlyList<byte[]> packets, int burstGapMs, int retransmit, CancellationToken outerCt)
+    {
+        _logger.LogDebug("SendContinuousBurstAsync: バースト連続送信開始 ({N}パケット, gap={Gap}ms, retransmit={Rt})", packets.Count, burstGapMs, retransmit);
+        var effectCt = BeginEffect(outerCt);
+        int gap = Math.Max(1, burstGapMs);
+        // retransmit>1: 各パケットを back-to-back で複数回送る＝RF取りこぼし対策。
+        // A3(全色1パケット)では再送してもブロック間のずれは増えない（同一パケットの反復のため）。
+        var opts = new SendOptions(RetransmitCount: Math.Max(1, retransmit));
+        while (!effectCt.IsCancellationRequested)
+        {
+            foreach (var p in packets)
+            {
+                await _transport.EnqueueAsync(p, opts, effectCt);
+            }
+            await Task.Delay(gap, effectCt);
+        }
+    }
+
+    /// <summary>
     /// 即時カラー送信。新操作として開始し、実行中の操作を自動中断する。
     /// </summary>
     public async Task SendColorAsync(byte field, Rgb color, CancellationToken outerCt)

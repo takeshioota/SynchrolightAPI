@@ -11,7 +11,7 @@ public record GlobalColorRequest(ColorValue Color, int? Field = null);
 
 public record RowsRequest(int Field, int StartRow, int RowLen, ColorValue Color);
 
-public record RowsEachRequest(int Field, int StartRow, int? Len, ColorValue? Color, ColorValue[]? Colors);
+public record RowsEachRequest(int Field, int StartRow, int? Len, ColorValue? Color, ColorValue[]? Colors, int? Retransmit = null, int? BurstGapMs = null);
 
 public record ColsRequest(int Field, int StartCol, int ColLen, ColorValue Color);
 
@@ -20,6 +20,12 @@ public record ColsEachRequest(int Field, int StartCol, int? Len, ColorValue? Col
 public record PointsRequest(int Field, int StartRow, int StartCol, int? Len, ColorValue? Color, ColorValue[]? Colors);
 
 public record BlockRequest(int ProgNo, int BlockNo, ColorValue Color);
+
+// 複数ブロック(AC)を「バースト保持」する（レインボー7色など同時点灯・ずれ低減用）。
+public record BlockEntry(int ProgNo, int BlockNo, ColorValue Color);
+// Concat=true(既定): 全ブロックのパケットを連結して1回の書込みで送出（パケット間の送出間隔を無くし、
+// ブロック間の点灯タイミングのずれを最小化）。false: 1パケットずつバースト送出（従来）。
+public record BlocksBurstRequest(BlockEntry[] Entries, int? BurstGapMs, bool? Concat, int? Retransmit = null);
 
 public record SequenceRequest(uint FrameNo);
 

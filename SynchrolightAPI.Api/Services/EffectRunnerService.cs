@@ -233,6 +233,50 @@ public class EffectRunnerService
     }
 
     /// <summary>
+    /// 複数パケットを「バースト」で連続送信して保持する。実行中のエフェクト/シーケンスは自動停止。
+    /// レインボー7色など「複数ブロックをほぼ同時に点灯・保持」する用途。全パケットを1バースト内で
+    /// 送り切るため、1パケットずつ巡回する方式よりブロック（端末）ごとのタイミングずれが小さい。
+    /// </summary>
+    public void StartPacketBurstHold(IReadOnlyList<byte[]> packets, int burstGapMs = 100, int retransmit = 1)
+    {
+        lock (_lock)
+        {
+            StopSequenceInternal();
+            StopEffectInternal();
+
+            var cts = new CancellationTokenSource();
+            _effectCts = cts;
+            _currentEffect = null;
+
+            _effectTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await _scheduler.SendContinuousBurstAsync(packets, burstGapMs, retransmit, cts.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "バーストホールドタスク異常終了");
+                }
+                finally
+                {
+                    lock (_lock)
+                    {
+                        if (_effectCts == cts)
+                        {
+                            _currentEffect = null;
+                            _effectTask = null;
+                        }
+                    }
+                }
+            });
+        }
+
+        _logger.LogInformation("API: バーストホールド開始 ({N}パケット, gap={Gap}ms)", packets.Count, burstGapMs);
+    }
+
+    /// <summary>
     /// SNO端末の内蔵プログラムを再生する（A1コマンド送信）。
     /// 実行中のエフェクト/シーケンスは自動停止。
     /// 内蔵プログラムは端末側で自律動作するため、PC側はA1パケットを連続送信して

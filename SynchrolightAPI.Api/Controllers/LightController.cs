@@ -46,16 +46,23 @@ public class LightController(ICommandBuilder cmd, ITransport transport, Sequence
 
         if (req.Colors != null && req.Colors.Length > 0)
         {
-            // 行別色: 単一パケットにまとめてホールド送信
-            var colors = req.Colors;
-            int len = colors.Length;
-            // 最後のチャンクをホールド（8行以下の場合は全体が1チャンク）
-            var chunk = colors.Select(c => (c.R, c.G, c.B)).Take(Math.Min(len, 8)).ToArray();
-            var packet = LightProtocol.BuildA3_Rows(field, startRow, (byte)chunk.Length, chunk);
-            runner.StartPacketHold(packet);
+            // 行別色: 8行ごとに A3 パケットへ分割し、全パケットをバースト保持（>8行対応）。
+            // 同一 A3 パケット内の行は1パケット＝同時反映。パケット間のみ僅かなずれ（連結バースト）。
+            var all = req.Colors.Select(c => (c.R, c.G, c.B)).ToArray();
+            var a3packets = new List<byte[]>();
+            for (int off = 0; off < all.Length; off += 8)
+            {
+                var chunk = all.Skip(off).Take(8).ToArray();
+                a3packets.Add(LightProtocol.BuildA3_Rows(field, (ushort)(startRow + off), (byte)chunk.Length, chunk));
+            }
+            // retransmit 指定 or 複数パケット時はバースト保持（back-to-back 反復送出でRF取りこぼしを抑える）。
+            if (req.Retransmit.HasValue || a3packets.Count > 1)
+                runner.StartPacketBurstHold(a3packets, req.BurstGapMs ?? 80, req.Retransmit ?? 1);
+            else
+                runner.StartPacketHold(a3packets[0]);
 
             return Ok(new ApiResponse(true,
-                Message: $"A3 Rows {startRow}-{startRow + len - 1} set"));
+                Message: $"A3 Rows {startRow}-{startRow + all.Length - 1} set ({a3packets.Count}pkt, retransmit={req.Retransmit ?? 1})"));
         }
         else if (req.Color != null && req.Len.HasValue)
         {
@@ -151,6 +158,41 @@ public class LightController(ICommandBuilder cmd, ITransport transport, Sequence
         runner.StartPacketHold(packet.Data);
         return Ok(new ApiResponse(true,
             Message: $"AC Block prog={req.ProgNo} block={req.BlockNo} set to ({rgb.R},{rgb.G},{rgb.B})"));
+    }
+
+    // POST /api/light/blocks — AC を複数ブロック分「バースト保持」（レインボー7色などの同時点灯・ずれ低減用）
+    [HttpPost("blocks")]
+    public IActionResult Blocks([FromBody] BlocksBurstRequest req)
+    {
+        if (req.Entries is null || req.Entries.Length == 0)
+            return BadRequest(new ApiResponse(false, Error: "entries は1件以上必要です"));
+
+        var packets = new List<byte[]>(req.Entries.Length);
+        foreach (var e in req.Entries)
+        {
+            var rgb = e.Color.ToRgb();
+            packets.Add(LightProtocol.BuildAC_BlockColor((byte)e.ProgNo, (byte)e.BlockNo, rgb.R, rgb.G, rgb.B));
+        }
+
+        int gap = req.BurstGapMs ?? 100;
+        int rt = req.Retransmit ?? 1;
+
+        // Concat(既定): 全パケットを連結して1書込みで送出＝パケット間の送出間隔(5ms×)を無くし、
+        // ブロック間の点灯ずれをシリアル送出時間(≈19ms/7×32byte@115200)まで最小化する。
+        // retransmit>1 で連結ブロブを back-to-back 反復送出＝RF取りこぼし対策（ずれは増えない）。
+        if (req.Concat ?? true)
+        {
+            var blob = new byte[packets.Sum(p => p.Length)];
+            int off = 0;
+            foreach (var p in packets) { Buffer.BlockCopy(p, 0, blob, off, p.Length); off += p.Length; }
+            runner.StartPacketBurstHold(new[] { blob }, gap, rt);
+            return Ok(new ApiResponse(true,
+                Message: $"AC concat-hold {packets.Count} blocks ({blob.Length}B / 1 write, retransmit={rt})"));
+        }
+
+        runner.StartPacketBurstHold(packets, gap, rt);
+        return Ok(new ApiResponse(true,
+            Message: $"AC burst-hold {packets.Count} blocks (gap={gap}ms, retransmit={rt})"));
     }
 
     // POST /api/light/sequence — A1
