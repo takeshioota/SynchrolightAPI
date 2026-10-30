@@ -348,11 +348,12 @@ public class EffectScheduler
     /// RetransmitCount=1 で TxWorker の1パケット処理を軽くしてバーストを素早く送り切る
     /// （到達信頼性は burstGapMs 間隔で反復されるバーストそのものが担保する）。
     /// </summary>
-    public async Task SendContinuousBurstAsync(IReadOnlyList<byte[]> packets, int burstGapMs, int retransmit, CancellationToken outerCt)
+    public async Task SendContinuousBurstAsync(IReadOnlyList<byte[]> packets, int burstGapMs, int retransmit, CancellationToken outerCt, int interPacketGapMs = 0)
     {
-        _logger.LogDebug("SendContinuousBurstAsync: バースト連続送信開始 ({N}パケット, gap={Gap}ms, retransmit={Rt})", packets.Count, burstGapMs, retransmit);
+        _logger.LogDebug("SendContinuousBurstAsync: バースト連続送信開始 ({N}パケット, gap={Gap}ms, retransmit={Rt}, interGap={Inter}ms)", packets.Count, burstGapMs, retransmit, interPacketGapMs);
         var effectCt = BeginEffect(outerCt);
         int gap = Math.Max(1, burstGapMs);
+        int interGap = Math.Max(0, interPacketGapMs);
         // retransmit>1: 各パケットを back-to-back で複数回送る＝RF取りこぼし対策。
         // A3(全色1パケット)では再送してもブロック間のずれは増えない（同一パケットの反復のため）。
         var opts = new SendOptions(RetransmitCount: Math.Max(1, retransmit));
@@ -361,8 +362,31 @@ public class EffectScheduler
             foreach (var p in packets)
             {
                 await _transport.EnqueueAsync(p, opts, effectCt);
+                // 送出レート検証モード(interGap>0): 1パケット発行ごとに均一な間隔を空け、送信機に届くAC
+                // パケットの発行間隔を可変にする。Windowsタイマー分解能(~15.6ms)では Task.Delay が 0〜10ms を
+                // 刻めないため Stopwatch スピン待機で正確に待つ。この間はバースト間キープアライブ(gap)は使わず
+                // 発行間隔そのもので連続ループする＝均一レートのストリームになる。
+                if (interGap > 0)
+                    SpinWaitMs(interGap, effectCt);
             }
-            await Task.Delay(gap, effectCt);
+            if (interGap <= 0)
+                await Task.Delay(gap, effectCt);
+        }
+    }
+
+    /// <summary>
+    /// Stopwatch ベースの高精度スピン待機（0〜十数ms 用）。OSのタイマー分解能(~15.6ms)に依存せず
+    /// ミリ秒単位で待てる。短時間専用（長い待機に使うと1コアを占有する）。キャンセルで即抜ける。
+    /// </summary>
+    private static void SpinWaitMs(int ms, CancellationToken ct)
+    {
+        if (ms <= 0) return;
+        var sw = Stopwatch.StartNew();
+        double target = ms;
+        while (sw.Elapsed.TotalMilliseconds < target)
+        {
+            if (ct.IsCancellationRequested) return;
+            System.Threading.Thread.SpinWait(64);
         }
     }
 

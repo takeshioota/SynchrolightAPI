@@ -237,7 +237,7 @@ public class EffectRunnerService
     /// レインボー7色など「複数ブロックをほぼ同時に点灯・保持」する用途。全パケットを1バースト内で
     /// 送り切るため、1パケットずつ巡回する方式よりブロック（端末）ごとのタイミングずれが小さい。
     /// </summary>
-    public void StartPacketBurstHold(IReadOnlyList<byte[]> packets, int burstGapMs = 100, int retransmit = 1)
+    public void StartPacketBurstHold(IReadOnlyList<byte[]> packets, int burstGapMs = 100, int retransmit = 1, int interPacketGapMs = 0)
     {
         lock (_lock)
         {
@@ -252,7 +252,7 @@ public class EffectRunnerService
             {
                 try
                 {
-                    await _scheduler.SendContinuousBurstAsync(packets, burstGapMs, retransmit, cts.Token);
+                    await _scheduler.SendContinuousBurstAsync(packets, burstGapMs, retransmit, cts.Token, interPacketGapMs);
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)

@@ -25,7 +25,9 @@ public record BlockRequest(int ProgNo, int BlockNo, ColorValue Color);
 public record BlockEntry(int ProgNo, int BlockNo, ColorValue Color);
 // Concat=true(既定): 全ブロックのパケットを連結して1回の書込みで送出（パケット間の送出間隔を無くし、
 // ブロック間の点灯タイミングのずれを最小化）。false: 1パケットずつバースト送出（従来）。
-public record BlocksBurstRequest(BlockEntry[] Entries, int? BurstGapMs, bool? Concat, int? Retransmit = null);
+// InterPacketGapMs: 1パケット送出(enqueue)ごとの間隔(ms)。指定時は非連結(Concat=false)の順次送出となり、
+//   送信機に届くACパケットの発行間隔を実測できる（送出レート検証用）。0 or 未指定なら従来どおり間を空けない。
+public record BlocksBurstRequest(BlockEntry[] Entries, int? BurstGapMs, bool? Concat, int? Retransmit = null, int? InterPacketGapMs = null);
 
 public record SequenceRequest(uint FrameNo);
 

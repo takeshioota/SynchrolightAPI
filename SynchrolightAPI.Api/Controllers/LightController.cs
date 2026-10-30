@@ -176,6 +176,17 @@ public class LightController(ICommandBuilder cmd, ITransport transport, Sequence
 
         int gap = req.BurstGapMs ?? 100;
         int rt = req.Retransmit ?? 1;
+        int interGap = Math.Max(0, req.InterPacketGapMs ?? 0);
+
+        // InterPacketGapMs 指定時: 送出レート検証モード。連結せず1パケットずつ interGap(ms) 間隔で送出し、
+        // 送信機に届くACパケットの発行間隔を可変にして送信機の追従挙動を観察する。間隔を支配変数にするため
+        // concat は無効化し（連結すると発行が1回になり間隔が意味を持たない）、再送も要求値どおり適用する。
+        if (interGap > 0)
+        {
+            runner.StartPacketBurstHold(packets, gap, rt, interGap);
+            return Ok(new ApiResponse(true,
+                Message: $"AC rate-test {packets.Count} blocks (interGap={interGap}ms, gap={gap}ms, retransmit={rt})"));
+        }
 
         // Concat(既定): 全パケットを連結して1書込みで送出＝パケット間の送出間隔(5ms×)を無くし、
         // ブロック間の点灯ずれをシリアル送出時間(≈19ms/7×32byte@115200)まで最小化する。
