@@ -1,0 +1,74 @@
+name: Security - Vulnerable Packages
+
+# NuGet の脆弱パッケージ検査を CI に組み込む。
+# - push / PR 時：依存追加・更新で脆弱性が混入していないか検査
+# - 毎週スケジュール：コード無変更でも新規に公開された CVE を定期検知
+# - 手動実行（workflow_dispatch）も可能
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * 1'   # 毎週月曜 00:00 UTC（＝月曜 09:00 JST）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_CLI_UI_LANGUAGE: en-US   # ログ出力を英語で固定（判定・可読性のため）
+
+jobs:
+  vulnerable-packages:
+    # Api プロジェクトが net10.0-windows TFM のため Windows ランナーで検査する
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore SynchrolightAPI.sln
+
+      - name: Scan for vulnerable packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # JSON 形式で取得（ロケールに依存せず機械判定するため）
+          dotnet list SynchrolightAPI.sln package --vulnerable --include-transitive \
+            --format json --output-version 1 > vuln.json
+
+          # topLevel / transitive 両方を再帰走査し、脆弱性の総数をカウント
+          COUNT=$(jq '[.. | .vulnerabilities? // empty | .[]] | length' vuln.json)
+          echo "検出された脆弱性: ${COUNT} 件"
+
+          # 人が読める一覧をログと Job Summary の両方に出力
+          {
+            echo '## 脆弱パッケージ検査結果'
+            echo ''
+            echo '```'
+            dotnet list SynchrolightAPI.sln package --vulnerable --include-transitive
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "::error::脆弱なパッケージが ${COUNT} 件検出されました。上記ログ / Job Summary を確認してください。"
+            exit 1
+          fi
+          echo "脆弱なパッケージは検出されませんでした。"
+
+      - name: Upload scan result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnerable-packages-report
+          path: vuln.json
+          if-no-files-found: ignore
